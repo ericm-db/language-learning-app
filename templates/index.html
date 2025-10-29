@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Language Learning App v2</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>🎓 Language Tutor v2</h1>
+            <p class="subtitle">Research-backed adaptive learning</p>
+            <div class="selectors-row">
+                <div class="language-selector">
+                    <label for="languageSelect">Learning:</label>
+                    <select id="languageSelect" onchange="changeLanguage()">
+                        <!-- Loaded dynamically -->
+                    </select>
+                </div>
+                <div class="mode-selector">
+                    <label for="modeSelect">Mode:</label>
+                    <select id="modeSelect" onchange="changeMode()">
+                        <option value="guided">📚 Guided</option>
+                        <option value="conversational">💬 Conversation</option>
+                    </select>
+                </div>
+            </div>
+            <div class="mode-description" id="modeDescription">
+                📚 Guided mode: Shows translations and helps you learn step-by-step
+            </div>
+        </header>
+
+        <!-- Stats Dashboard -->
+        <div class="stats-card" id="statsCard">
+            <div class="stat-item">
+                <span class="stat-value" id="totalPhrases">0</span>
+                <span class="stat-label">Total Phrases</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value" id="dueReviews">0</span>
+                <span class="stat-label">Due for Review</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value" id="mastered">0</span>
+                <span class="stat-label">Mastered</span>
+            </div>
+            <div class="stat-item" id="complexityDisplay" style="display:none;">
+                <span class="stat-value" id="complexityLevel">1</span>
+                <span class="stat-label">Complexity</span>
+            </div>
+        </div>
+
+        <!-- Main Menu -->
+        <div class="menu" id="mainMenu">
+            <h2>Choose a Learning Mode</h2>
+            <div class="button-group">
+                <button class="menu-button" onclick="showScenarios()">
+                    <span class="icon">🗣️</span>
+                    <span class="button-text">Practice Scenario</span>
+                </button>
+                <button class="menu-button" onclick="showReview()">
+                    <span class="icon">📚</span>
+                    <span class="button-text">Review Phrases</span>
+                </button>
+                <button class="menu-button" onclick="showVocabulary()">
+                    <span class="icon">📓</span>
+                    <span class="button-text">Vocabulary Notebook</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Scenario Selection -->
+        <div class="panel hidden" id="scenarioPanel">
+            <h2>Choose a Practice Scenario</h2>
+            <div id="scenarioList" class="scenario-list"></div>
+            <button class="back-button" onclick="showMainMenu()">← Back to Menu</button>
+        </div>
+
+        <!-- Conversation Panel -->
+        <div class="panel hidden" id="conversationPanel">
+            <div class="conversation-header">
+                <h2 id="conversationTitle">Practice Conversation</h2>
+                <div class="header-actions">
+                    <span class="complexity-badge" id="currentComplexity">Level 1</span>
+                    <button class="close-button" onclick="endConversation()">✕ End</button>
+                </div>
+            </div>
+
+            <div class="conversation-container" id="conversationContainer">
+                <!-- Messages added dynamically -->
+            </div>
+
+            <div class="input-area">
+                <div class="status-indicator" id="statusIndicator">Ready to start</div>
+                <button class="mic-button" id="micButton" onclick="toggleRecording()">
+                    <span id="micIcon">🎤</span>
+                    <span id="micText">Click to Speak</span>
+                </button>
+                <div class="text-input-container">
+                    <input type="text" id="userInput" placeholder="Or type here..." />
+                    <button onclick="sendTextMessage()">Send</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Review Panel (same as before) -->
+        <div class="panel hidden" id="reviewPanel">
+            <h2>Spaced Repetition Review</h2>
+            <div id="reviewContainer">
+                <div id="noReviews" class="empty-state hidden">
+                    <p>✅ No phrases due for review!</p>
+                    <p>Keep practicing new scenarios to build your vocabulary.</p>
+                </div>
+                <div id="reviewCard" class="review-card hidden">
+                    <div class="review-progress" id="reviewProgress"></div>
+                    <div class="review-content">
+                        <p class="review-context" id="reviewContext"></p>
+                        <p class="review-english" id="reviewEnglish"></p>
+                        <button class="reveal-button" id="revealButton" onclick="revealAnswer()">
+                            Show Answer
+                        </button>
+                        <div id="reviewAnswer" class="hidden">
+                            <p class="review-telugu" id="reviewTelugu"></p>
+                            <p class="review-transliteration" id="reviewTransliteration"></p>
+                            <button class="audio-button" onclick="playReviewAudio()">🔊 Listen</button>
+                            <div class="review-buttons">
+                                <button class="wrong-button" onclick="markReview(false)">❌ I Forgot</button>
+                                <button class="correct-button" onclick="markReview(true)">✅ I Remembered</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <button class="back-button" onclick="showMainMenu()">← Back to Menu</button>
+        </div>
+
+        <!-- Vocabulary Panel (same as before) -->
+        <div class="panel hidden" id="vocabularyPanel">
+            <h2>📓 Your Vocabulary Notebook</h2>
+            <div id="vocabularyContainer">
+                <div id="noVocabulary" class="empty-state">
+                    <p>Your vocabulary notebook is empty.</p>
+                    <p>Practice some scenarios to start building it!</p>
+                </div>
+            </div>
+            <button class="back-button" onclick="showMainMenu()">← Back to Menu</button>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay hidden" id="loadingOverlay">
+        <div class="spinner"></div>
+        <p>Processing...</p>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app_v2.js') }}"></script>
+</body>
+</html>
