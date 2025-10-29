@@ -23,6 +23,13 @@ from flask import Flask, render_template, request, jsonify, send_file
 import anthropic
 from cartesia import Cartesia
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    print("Warning: python-dotenv not installed. Using system environment variables only.")
+
 # Language configuration
 LANGUAGES = {
     'telugu': {
