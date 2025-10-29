@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PWA Icon Generator</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1a1a2e;
+            color: white;
+        }
+        .canvas-container {
+            display: none;
+        }
+        canvas {
+            border: 2px solid #6366f1;
+            margin: 10px 0;
+        }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            opacity: 0.9;
+        }
+        .icon-preview {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .icon-item {
+            text-align: center;
+        }
+        .icon-item img {
+            border: 2px solid #6366f1;
+            border-radius: 8px;
+        }
+        h1 {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+    </style>
+</head>
+<body>
+    <h1>Language Learning App - PWA Icon Generator</h1>
+    <p>This tool generates all required PWA icons. Click the button below to generate and download all icons.</p>
+
+    <button onclick="generateAllIcons()">Generate All Icons</button>
+
+    <div class="icon-preview" id="preview"></div>
+    <div class="canvas-container" id="canvases"></div>
+
+    <script>
+        const sizes = [72, 96, 128, 144, 152, 192, 384, 512];
+
+        function drawIcon(canvas, size) {
+            const ctx = canvas.getContext('2d');
+            canvas.width = size;
+            canvas.height = size;
+
+            // Background gradient
+            const gradient = ctx.createLinearGradient(0, 0, size, size);
+            gradient.addColorStop(0, '#667eea');
+            gradient.addColorStop(1, '#764ba2');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, size, size);
+
+            // Draw language symbols
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${size * 0.4}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            // Draw "A" for language learning
+            ctx.fillText('Aa', size / 2, size / 2);
+
+            // Add small accent
+            ctx.font = `${size * 0.15}px Arial`;
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.fillText('తెలుగు', size / 2, size * 0.75);
+        }
+
+        function generateAllIcons() {
+            const preview = document.getElementById('preview');
+            const canvasContainer = document.getElementById('canvases');
+            preview.innerHTML = '';
+            canvasContainer.innerHTML = '';
+
+            sizes.forEach(size => {
+                // Create canvas
+                const canvas = document.createElement('canvas');
+                canvas.id = `icon-${size}`;
+                canvasContainer.appendChild(canvas);
+
+                // Draw icon
+                drawIcon(canvas, size);
+
+                // Create download link
+                const dataUrl = canvas.toDataURL('image/png');
+
+                // Create preview
+                const iconItem = document.createElement('div');
+                iconItem.className = 'icon-item';
+                iconItem.innerHTML = `
+                    <img src="${dataUrl}" width="${Math.min(size, 128)}" height="${Math.min(size, 128)}" alt="${size}x${size}">
+                    <div>${size}x${size}</div>
+                    <a href="${dataUrl}" download="icon-${size}x${size}.png">
+                        <button>Download</button>
+                    </a>
+                `;
+                preview.appendChild(iconItem);
+            });
+
+            alert('Icons generated! Right-click each icon and save it to the /static/icons/ folder with the filename shown (e.g., icon-192x192.png)');
+        }
+    </script>
+</body>
+</html>
