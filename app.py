@@ -23,9 +23,6 @@ from flask import Flask, render_template, request, jsonify, send_file
 import anthropic
 from cartesia import Cartesia
 
-# Import SRS from original
-from app import SpacedRepetitionSystem
-
 # Language configuration
 LANGUAGES = {
     'telugu': {
@@ -81,6 +78,96 @@ SCENARIOS = [
     "ordering food at a restaurant",
     "shopping for clothes"
 ]
+
+
+# Spaced Repetition System
+class SpacedRepetitionSystem:
+    """Simple spaced repetition system for vocabulary tracking"""
+
+    def __init__(self):
+        self.vocab_file = 'vocabulary.json'
+        self.vocabulary = self._load_vocabulary()
+
+    def _load_vocabulary(self):
+        """Load vocabulary from file"""
+        if os.path.exists(self.vocab_file):
+            try:
+                with open(self.vocab_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return []
+        return []
+
+    def _save_vocabulary(self):
+        """Save vocabulary to file"""
+        try:
+            with open(self.vocab_file, 'w', encoding='utf-8') as f:
+                json.dump(self.vocabulary, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Error saving vocabulary: {e}")
+
+    def add_difficult_phrase(self, telugu: str, transliteration: str, english: str, context: str = ''):
+        """Add a difficult phrase to vocabulary"""
+        phrase = {
+            'telugu': telugu,
+            'transliteration': transliteration,
+            'english': english,
+            'context': context,
+            'added': datetime.now().isoformat(),
+            'next_review': datetime.now().isoformat(),
+            'interval': 1,  # days
+            'ease_factor': 2.5,
+            'reviews': 0,
+            'correct': 0
+        }
+        self.vocabulary.append(phrase)
+        self._save_vocabulary()
+
+    def get_due_reviews(self):
+        """Get phrases due for review"""
+        now = datetime.now()
+        due = []
+        for phrase in self.vocabulary:
+            next_review = datetime.fromisoformat(phrase['next_review'])
+            if next_review <= now:
+                due.append(phrase)
+        return sorted(due, key=lambda x: x['next_review'])
+
+    def mark_reviewed(self, telugu: str, success: bool):
+        """Mark a phrase as reviewed and update its schedule"""
+        for phrase in self.vocabulary:
+            if phrase['telugu'] == telugu:
+                phrase['reviews'] += 1
+                if success:
+                    phrase['correct'] += 1
+                    # Increase interval (SM-2 algorithm simplified)
+                    phrase['interval'] = max(1, int(phrase['interval'] * phrase['ease_factor']))
+                    phrase['ease_factor'] = max(1.3, phrase['ease_factor'] + 0.1)
+                else:
+                    # Reset interval on failure
+                    phrase['interval'] = 1
+                    phrase['ease_factor'] = max(1.3, phrase['ease_factor'] - 0.2)
+
+                phrase['next_review'] = (datetime.now() + timedelta(days=phrase['interval'])).isoformat()
+                self._save_vocabulary()
+                break
+
+    def get_all_vocab(self):
+        """Get all vocabulary items"""
+        return self.vocabulary
+
+    def get_stats(self):
+        """Get vocabulary statistics"""
+        total = len(self.vocabulary)
+        due = len(self.get_due_reviews())
+        mastered = sum(1 for p in self.vocabulary if p.get('ease_factor', 0) > 2.5 and p.get('reviews', 0) > 3)
+
+        return {
+            'total': total,
+            'due': due,
+            'mastered': mastered
+        }
+
 
 # Initialize Flask
 app = Flask(__name__)
@@ -254,7 +341,7 @@ def extract_target_language_for_tts(text: str, script_start: str, script_end: st
 
 @app.route('/')
 def index():
-    return render_template('index_v2.html')
+    return render_template('index.html')
 
 
 @app.route('/api/languages')
