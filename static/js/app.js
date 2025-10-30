@@ -13,6 +13,7 @@ let currentReviewPhrase = null;
 let autoFlowEnabled = true;
 let currentAudio = null;
 let currentComplexity = 1;
+let lastAiMessage = '';
 
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
@@ -21,7 +22,80 @@ document.addEventListener('DOMContentLoaded', function() {
     showMainMenu();
     updateModeDescription();
     registerServiceWorker();
+    setupBrowserNavigation();
 });
+
+// Setup browser back/forward navigation
+function setupBrowserNavigation() {
+    // Handle browser back/forward buttons
+    window.addEventListener('popstate', function(event) {
+        if (event.state && event.state.view) {
+            switch(event.state.view) {
+                case 'menu':
+                    showMainMenuWithoutHistory();
+                    break;
+                case 'scenarios':
+                    showScenariosWithoutHistory();
+                    break;
+                case 'review':
+                    showReviewWithoutHistory();
+                    break;
+                case 'vocabulary':
+                    showVocabularyWithoutHistory();
+                    break;
+                case 'conversation':
+                    // Restore conversation state if needed
+                    break;
+            }
+        }
+    });
+
+    // Set initial state
+    history.replaceState({view: 'menu'}, '', '#menu');
+}
+
+// Versions without history push (for popstate navigation)
+function showMainMenuWithoutHistory() {
+    stopCurrentAudio();
+    hideAllPanels();
+    document.getElementById('mainMenu').classList.remove('hidden');
+    document.getElementById('complexityDisplay').style.display = 'none';
+    loadStats();
+}
+
+function showScenariosWithoutHistory() {
+    stopCurrentAudio();
+    hideAllPanels();
+    document.getElementById('scenarioPanel').classList.remove('hidden');
+    loadScenarios();
+}
+
+function showReviewWithoutHistory() {
+    stopCurrentAudio();
+    hideAllPanels();
+    document.getElementById('reviewPanel').classList.remove('hidden');
+    loadReviews();
+}
+
+function showVocabularyWithoutHistory() {
+    stopCurrentAudio();
+    hideAllPanels();
+    document.getElementById('vocabularyPanel').classList.remove('hidden');
+    loadVocabulary();
+}
+
+// Stop any currently playing audio
+function stopCurrentAudio() {
+    if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.currentTime = 0;
+        currentAudio = null;
+    }
+    // Also stop any ongoing recording
+    if (isRecording) {
+        stopRecording();
+    }
+}
 
 // Register Service Worker for PWA
 function registerServiceWorker() {
@@ -99,28 +173,36 @@ function updateStatus(message, type = '') {
 
 // Show/hide panels
 function showMainMenu() {
+    stopCurrentAudio();
     hideAllPanels();
     document.getElementById('mainMenu').classList.remove('hidden');
     document.getElementById('complexityDisplay').style.display = 'none';
     loadStats();
+    history.pushState({view: 'menu'}, '', '#menu');
 }
 
 function showScenarios() {
+    stopCurrentAudio();
     hideAllPanels();
     document.getElementById('scenarioPanel').classList.remove('hidden');
     loadScenarios();
+    history.pushState({view: 'scenarios'}, '', '#scenarios');
 }
 
 function showReview() {
+    stopCurrentAudio();
     hideAllPanels();
     document.getElementById('reviewPanel').classList.remove('hidden');
     loadReviews();
+    history.pushState({view: 'review'}, '', '#review');
 }
 
 function showVocabulary() {
+    stopCurrentAudio();
     hideAllPanels();
     document.getElementById('vocabularyPanel').classList.remove('hidden');
     loadVocabulary();
+    history.pushState({view: 'vocabulary'}, '', '#vocabulary');
 }
 
 function hideAllPanels() {
@@ -154,11 +236,33 @@ async function loadScenarios() {
         const scenarioList = document.getElementById('scenarioList');
         scenarioList.innerHTML = '';
 
-        scenarios.forEach(scenario => {
+        scenarios.forEach(scenarioData => {
             const item = document.createElement('div');
             item.className = 'scenario-item';
-            item.textContent = scenario;
-            item.onclick = () => startScenario(scenario);
+
+            if (scenarioData.is_ready) {
+                item.className += ' ready';
+                item.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span>✅ ${scenarioData.name}</span>
+                        <span style="font-size: 0.8em; color: #666;">${scenarioData.required_level}</span>
+                    </div>
+                `;
+                item.onclick = () => startScenario(scenarioData.name);
+            } else {
+                item.className += ' locked';
+                item.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span>🔒 ${scenarioData.name}</span>
+                        <span style="font-size: 0.8em; color: #999;">
+                            ${scenarioData.required_level} - Need ${scenarioData.required_words} words
+                            (You have ${scenarioData.user_progress})
+                        </span>
+                    </div>
+                `;
+                item.onclick = () => alert(`This scenario requires ${scenarioData.required_level} level (${scenarioData.required_words} words mastered). Keep practicing!`);
+            }
+
             scenarioList.appendChild(item);
         });
     } catch (error) {
@@ -171,11 +275,15 @@ async function startScenario(scenario) {
     currentScenario = scenario;
     currentSessionId = generateSessionId();
 
+    stopCurrentAudio();
     hideAllPanels();
     document.getElementById('conversationPanel').classList.remove('hidden');
     document.getElementById('conversationTitle').textContent = scenario;
     document.getElementById('conversationContainer').innerHTML = '';
     document.getElementById('complexityDisplay').style.display = 'block';
+
+    // Add to browser history
+    history.pushState({view: 'conversation', scenario: scenario}, '', `#conversation/${encodeURIComponent(scenario)}`);
 
     updateComplexityBadge(1);
     showLoading(true);
@@ -198,6 +306,7 @@ async function startScenario(scenario) {
             currentComplexity = data.complexity || 1;
             updateComplexityBadge(currentComplexity);
             updateStatus('🎧 Listening to tutor...', 'listening');
+            lastAiMessage = data.message;
             addMessageToConversation('tutor', data.message);
         } else {
             alert('Error starting conversation: ' + data.error);
@@ -387,12 +496,8 @@ async function startRecording() {
         document.getElementById('micIcon').textContent = '🔴';
         document.getElementById('micText').textContent = 'Recording... (Click to stop)';
 
-        setTimeout(() => {
-            if (isRecording) {
-                updateStatus('⏱️ Time\'s up! Processing...', 'speaking');
-                stopRecording();
-            }
-        }, 5000);
+        // No automatic timeout - user controls when to stop
+        // (They click the mic button again to stop recording)
 
     } catch (error) {
         console.error('Error accessing microphone:', error);
@@ -410,6 +515,27 @@ function stopRecording() {
         micButton.classList.remove('recording');
         document.getElementById('micIcon').textContent = '🎤';
         document.getElementById('micText').textContent = 'Click to Speak';
+    }
+}
+
+// Evaluate user's response for comprehension
+async function evaluateResponse(userText) {
+    try {
+        const response = await fetch('/api/evaluate-response', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                user_text: userText,
+                session_id: currentSessionId,
+                ai_message: lastAiMessage
+            })
+        });
+
+        const data = await response.json();
+        return data.understood !== false; // Default to true if evaluation fails
+    } catch (error) {
+        console.error('Error evaluating response:', error);
+        return true; // Default to success if evaluation fails
     }
 }
 
@@ -432,7 +558,12 @@ async function transcribeAudio(audioBlob) {
 
         if (data.success && data.text) {
             addMessageToConversation('user', data.text);
-            await continueConversation(data.text, true); // Mark as successful response
+
+            // Evaluate comprehension before continuing
+            updateStatus('🧠 Checking comprehension...', 'speaking');
+            const understood = await evaluateResponse(data.text);
+
+            await continueConversation(data.text, understood);
         } else {
             updateStatus('Could not understand. Try again or type below.', '');
             alert('Could not transcribe audio. Please try typing instead.');
@@ -441,6 +572,47 @@ async function transcribeAudio(audioBlob) {
         console.error('Error transcribing audio:', error);
         updateStatus('Error. Try again or type below.', '');
         alert('Failed to transcribe. Please try typing instead.');
+    } finally {
+        showLoading(false);
+    }
+}
+
+// Ask for help in English
+async function askForHelp() {
+    const question = prompt('Ask in English (e.g., "How do I say I\'m hungry?" or "What does నేను mean?")');
+
+    if (!question || !question.trim()) return;
+
+    // Show the English question in the conversation
+    addMessageToConversation('user', `[English question: ${question}]`);
+
+    updateStatus('💭 Getting help...', 'speaking');
+    showLoading(true);
+
+    try {
+        const response = await fetch('/api/help-request', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                question: question,
+                session_id: currentSessionId
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            updateStatus('🎧 Listening...', 'listening');
+            lastAiMessage = data.message;
+            addMessageToConversation('tutor', data.message);
+        } else {
+            updateStatus('Error occurred', '');
+            alert('Error: ' + data.error);
+        }
+    } catch (error) {
+        console.error('Error getting help:', error);
+        updateStatus('Error occurred', '');
+        alert('Failed to get help');
     } finally {
         showLoading(false);
     }
@@ -455,7 +627,14 @@ async function sendTextMessage() {
 
     input.value = '';
     addMessageToConversation('user', text);
-    await continueConversation(text, true);
+
+    // Evaluate comprehension before continuing
+    updateStatus('🧠 Checking comprehension...', 'speaking');
+    showLoading(true);
+    const understood = await evaluateResponse(text);
+    showLoading(false);
+
+    await continueConversation(text, understood);
 }
 
 // Continue conversation
@@ -483,6 +662,7 @@ async function continueConversation(userText, success = true) {
             }
 
             updateStatus('🎧 Listening...', 'listening');
+            lastAiMessage = data.message;
             addMessageToConversation('tutor', data.message);
         } else {
             updateStatus('Error occurred', '');
@@ -500,6 +680,7 @@ async function continueConversation(userText, success = true) {
 // End conversation
 function endConversation() {
     if (confirm('Are you sure you want to end this practice session?')) {
+        stopCurrentAudio();
         showMainMenu();
     }
 }

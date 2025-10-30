@@ -18,6 +18,7 @@ import tempfile
 from datetime import datetime, timedelta
 from collections import defaultdict
 from pathlib import Path
+import re
 
 from flask import Flask, render_template, request, jsonify, send_file
 import anthropic
@@ -176,6 +177,205 @@ class SpacedRepetitionSystem:
         }
 
 
+class VocabularyTracker:
+    """Tracks user's vocabulary knowledge based on CEFR levels"""
+
+    def __init__(self, language='telugu'):
+        self.language = language
+        self.vocab_dir = Path('vocabulary')
+        self.user_vocab_file = f'user_vocabulary_{language}.json'
+
+        # Load tier vocabulary
+        self.tiers = self._load_tiers()
+
+        # Load user's vocabulary knowledge
+        self.user_vocab = self._load_user_vocabulary()
+
+    def _load_tiers(self):
+        """Load vocabulary tiers from JSON files"""
+        tiers = {}
+        for level in ['a1', 'a2', 'b1']:
+            tier_file = self.vocab_dir / f'{self.language}_{level}.json'
+            if tier_file.exists():
+                try:
+                    with open(tier_file, 'r', encoding='utf-8') as f:
+                        tier_data = json.load(f)
+                        # Flatten words from all categories
+                        all_words = []
+                        for category_data in tier_data['categories'].values():
+                            all_words.extend(category_data['words'])
+                        tiers[level.upper()] = {
+                            'words': all_words,
+                            'total': len(all_words),
+                            'requirements': tier_data.get('scenario_requirements', {}),
+                            'minimum_mastery': tier_data.get(f'minimum_mastery_before_{chr(ord(level[0])+1)}2' if level != 'b1' else 'minimum_mastery_before_b2', 0)
+                        }
+                except Exception as e:
+                    print(f"Error loading tier {level}: {e}")
+        return tiers
+
+    def _load_user_vocabulary(self):
+        """Load user's vocabulary progress"""
+        if os.path.exists(self.user_vocab_file):
+            try:
+                with open(self.user_vocab_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return self._init_user_vocab()
+        return self._init_user_vocab()
+
+    def _init_user_vocab(self):
+        """Initialize user vocabulary tracking"""
+        return {
+            'current_level': 'A1',
+            'words': {},  # {telugu_word: {encounters: int, successes: int, last_seen: iso_datetime}}
+            'level_progress': {
+                'A1': {'exposed': 0, 'mastered': 0},
+                'A2': {'exposed': 0, 'mastered': 0},
+                'B1': {'exposed': 0, 'mastered': 0}
+            }
+        }
+
+    def _save_user_vocabulary(self):
+        """Save user's vocabulary progress"""
+        try:
+            with open(self.user_vocab_file, 'w', encoding='utf-8') as f:
+                json.dump(self.user_vocab, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Error saving user vocabulary: {e}")
+
+    def record_word_exposure(self, telugu_word: str, understood: bool):
+        """Record that user encountered a word"""
+        if telugu_word not in self.user_vocab['words']:
+            self.user_vocab['words'][telugu_word] = {
+                'encounters': 0,
+                'successes': 0,
+                'last_seen': datetime.now().isoformat()
+            }
+
+        word_data = self.user_vocab['words'][telugu_word]
+        word_data['encounters'] += 1
+        if understood:
+            word_data['successes'] += 1
+        word_data['last_seen'] = datetime.now().isoformat()
+
+        self._save_user_vocabulary()
+
+    def is_word_mastered(self, telugu_word: str) -> bool:
+        """Check if a word is mastered (3+ successful encounters, 80%+ success rate)"""
+        if telugu_word not in self.user_vocab['words']:
+            return False
+
+        word_data = self.user_vocab['words'][telugu_word]
+        if word_data['encounters'] < 3:
+            return False
+
+        success_rate = word_data['successes'] / word_data['encounters']
+        return success_rate >= 0.8
+
+    def get_allowed_vocabulary_for_level(self, level: str) -> list:
+        """Get list of words allowed at this level"""
+        allowed_words = []
+
+        # Include all words from current and previous levels
+        level_order = ['A1', 'A2', 'B1']
+        current_idx = level_order.index(level) if level in level_order else 0
+
+        for i in range(current_idx + 1):
+            tier_level = level_order[i]
+            if tier_level in self.tiers:
+                allowed_words.extend([w['telugu'] for w in self.tiers[tier_level]['words']])
+
+        return allowed_words
+
+    def calculate_known_word_percentage(self, conversation_text: str, level: str) -> float:
+        """Calculate what % of words in text are known to user"""
+        # Extract Telugu words from text
+        words = re.findall(r'[\u0C00-\u0C7F]+', conversation_text)
+        if not words:
+            return 0.0
+
+        known_count = sum(1 for w in words if self.is_word_mastered(w))
+        return known_count / len(words)
+
+    def get_vocabulary_instructions_for_level(self, level: str) -> str:
+        """Generate vocabulary instructions for Claude based on user's level"""
+        allowed_words = self.get_allowed_vocabulary_for_level(level)
+        mastered_words = [w for w in allowed_words if self.is_word_mastered(w)]
+
+        level_info = self.tiers.get(level, {})
+
+        # Build explicit word list instruction
+        instruction = f"""VOCABULARY CONSTRAINTS FOR {level}:
+- You MUST use primarily words the user has already mastered: {len(mastered_words)} words
+- You may introduce 1-3 NEW words per conversation turn from the {level} tier
+- RECYCLE previously used words across multiple turns (minimum 6-10 encounters per new word)
+- Target: User should know 95%+ of words in each utterance
+
+"""
+
+        if level == 'A1':
+            instruction += """A1 CORE VOCABULARY (300 words):
+- Concrete, survival vocabulary only
+- Greetings, pronouns, basic verbs (go, come, eat, drink)
+- Numbers 1-10, immediate family, basic food items
+- High-frequency words only"""
+        elif level == 'A2':
+            instruction += """A2 EXPANDED VOCABULARY (700 additional words):
+- Past and future tense forms
+- Expanded food vocabulary, clothing, weather
+- Days of week, time expressions
+- Transportation and places"""
+        elif level == 'B1':
+            instruction += """B1 INTERMEDIATE VOCABULARY (1000 additional words):
+- Abstract concepts (thought, problem, solution)
+- Conditional expressions
+- Common idioms and formal language
+- Technology and activities"""
+
+        return instruction
+
+    def get_current_cefr_level(self) -> str:
+        """Determine user's current CEFR level based on mastery"""
+        progress = self.user_vocab['level_progress']
+
+        # Check if ready for B1
+        if progress['A2']['mastered'] >= self.tiers.get('A2', {}).get('minimum_mastery', 600):
+            return 'B1'
+
+        # Check if ready for A2
+        if progress['A1']['mastered'] >= self.tiers.get('A1', {}).get('minimum_mastery', 240):
+            return 'A2'
+
+        return 'A1'
+
+    def update_level_progress(self):
+        """Update progress statistics for each level"""
+        for level in ['A1', 'A2', 'B1']:
+            if level not in self.tiers:
+                continue
+
+            tier_words = [w['telugu'] for w in self.tiers[level]['words']]
+            exposed = sum(1 for w in tier_words if w in self.user_vocab['words'])
+            mastered = sum(1 for w in tier_words if self.is_word_mastered(w))
+
+            self.user_vocab['level_progress'][level] = {
+                'exposed': exposed,
+                'mastered': mastered
+            }
+
+        self._save_user_vocabulary()
+
+    def get_stats(self) -> dict:
+        """Get vocabulary statistics"""
+        self.update_level_progress()
+        return {
+            'current_level': self.get_current_cefr_level(),
+            'progress': self.user_vocab['level_progress'],
+            'total_words_known': len([w for w in self.user_vocab['words'] if self.is_word_mastered(w)])
+        }
+
+
 # Initialize Flask
 app = Flask(__name__)
 
@@ -186,6 +386,9 @@ cartesia_client = Cartesia(api_key=os.getenv("CARTESIA_API_KEY"))
 # Initialize SRS
 srs = SpacedRepetitionSystem()
 
+# Initialize vocabulary tracker
+vocab_tracker = VocabularyTracker(language='telugu')
+
 # Conversation state
 conversation_state = {}
 
@@ -193,45 +396,87 @@ conversation_state = {}
 class PerformanceTracker:
     """Tracks user performance to adapt difficulty"""
 
-    def __init__(self):
+    def __init__(self, vocab_tracker=None):
         self.exchanges = 0
         self.successful = 0
         self.struggled = 0
         self.current_complexity = 1  # Start at beginner
+        self.vocab_tracker = vocab_tracker
+        self.consecutive_successes = 0
+        self.consecutive_failures = 0
+        self.exchanges_at_current_level = 0
 
     def record_exchange(self, success: bool):
         """Record an exchange and update complexity"""
         self.exchanges += 1
+        self.exchanges_at_current_level += 1
 
         if success:
             self.successful += 1
+            self.consecutive_successes += 1
+            self.consecutive_failures = 0
         else:
             self.struggled += 1
+            self.consecutive_failures += 1
+            self.consecutive_successes = 0
 
-        # Evaluate every 5 exchanges
-        if self.exchanges % 5 == 0:
+        # Evaluate every 15 exchanges (was 5 - research-backed change)
+        if self.exchanges % 15 == 0:
             self._adjust_complexity()
 
     def _adjust_complexity(self):
-        """Adjust complexity based on success rate"""
+        """
+        Adjust complexity based on success rate and mastery requirements.
+        Research-backed: Requires sustained performance and minimum exposure time.
+        """
         if self.exchanges == 0:
             return
 
         success_rate = self.successful / self.exchanges
 
-        if success_rate > 0.8 and self.current_complexity < 3:
-            # Too easy - increase complexity
+        # LEVEL UP REQUIREMENTS (stricter - research-backed)
+        # Requires: 80%+ success rate, 3+ consecutive successes, 15+ exchanges at current level
+        can_level_up = (
+            success_rate > 0.8 and
+            self.consecutive_successes >= 3 and
+            self.exchanges_at_current_level >= 15 and
+            self.current_complexity < 3
+        )
+
+        # LEVEL DOWN REQUIREMENTS (to prevent frustration)
+        # Requires: <50% success rate OR 3+ consecutive failures
+        should_level_down = (
+            (success_rate < 0.5 or self.consecutive_failures >= 3) and
+            self.current_complexity > 1
+        )
+
+        if can_level_up:
             self.current_complexity += 1
-            print(f"📈 Increasing complexity to level {self.current_complexity}")
-        elif success_rate < 0.5 and self.current_complexity > 1:
-            # Too hard - decrease complexity
+            self.exchanges_at_current_level = 0
+            self.consecutive_successes = 0
+            print(f"📈 Increasing complexity to level {self.current_complexity} (CEFR: {self.get_cefr_level()})")
+        elif should_level_down:
             self.current_complexity -= 1
-            print(f"📉 Decreasing complexity to level {self.current_complexity}")
+            self.exchanges_at_current_level = 0
+            self.consecutive_failures = 0
+            print(f"📉 Decreasing complexity to level {self.current_complexity} (CEFR: {self.get_cefr_level()})")
         # else: maintain current complexity (50-80% is ideal i+1 zone)
 
     def get_complexity_instruction(self):
         """Get instructions for current complexity level"""
         return COMPLEXITY_INSTRUCTIONS.get(self.current_complexity, COMPLEXITY_INSTRUCTIONS[1])
+
+    def get_cefr_level(self):
+        """Map complexity level (1-3) to CEFR level (A1-B1)"""
+        mapping = {1: 'A1', 2: 'A2', 3: 'B1'}
+        return mapping.get(self.current_complexity, 'A1')
+
+    def get_vocabulary_instruction(self):
+        """Get vocabulary instructions based on CEFR level"""
+        if self.vocab_tracker:
+            cefr_level = self.get_cefr_level()
+            return self.vocab_tracker.get_vocabulary_instructions_for_level(cefr_level)
+        return ""
 
     def get_stats(self):
         """Get performance statistics"""
@@ -240,6 +485,7 @@ class PerformanceTracker:
             'successful': self.successful,
             'struggled': self.struggled,
             'complexity': self.current_complexity,
+            'cefr_level': self.get_cefr_level(),
             'success_rate': self.successful / self.exchanges if self.exchanges > 0 else 0
         }
 
@@ -247,6 +493,7 @@ class PerformanceTracker:
 def generate_guided_prompt(language_name: str, scenario: str, complexity_tracker: PerformanceTracker):
     """Generate prompt for guided immersion mode"""
     complexity_instruction = complexity_tracker.get_complexity_instruction()
+    vocabulary_instruction = complexity_tracker.get_vocabulary_instruction()
 
     return f"""You are a friendly {language_name} tutor helping a learner practice in a "{scenario}" situation.
 
@@ -257,8 +504,10 @@ PEDAGOGICAL PRINCIPLES:
 4. STRATEGIC L1: Use English explanations ONLY when user is clearly stuck
 5. MEANINGFUL INTERACTION: Ask follow-up questions that require substantive responses
 
-CURRENT COMPLEXITY LEVEL: {complexity_tracker.current_complexity}
+CURRENT COMPLEXITY LEVEL: {complexity_tracker.current_complexity} ({complexity_tracker.get_cefr_level()})
 {complexity_instruction}
+
+{vocabulary_instruction}
 
 FORMAT (CRITICAL - FOLLOW EXACTLY):
 {language_name} text
@@ -287,6 +536,7 @@ Start the conversation naturally. Greet the user."""
 def generate_conversational_prompt(language_name: str, scenario: str, complexity_tracker: PerformanceTracker):
     """Generate prompt for pure conversational mode"""
     complexity_instruction = complexity_tracker.get_complexity_instruction()
+    vocabulary_instruction = complexity_tracker.get_vocabulary_instruction()
 
     return f"""You are a native {language_name} speaker having a casual, natural conversation about "{scenario}".
 
@@ -301,8 +551,10 @@ CRITICAL RULES:
    - If they make errors → naturally use correct form in your reply (don't point it out)
 4. STAY IN CHARACTER: You're a real person in this situation
 
-COMPLEXITY ADJUSTMENT: Level {complexity_tracker.current_complexity}
+COMPLEXITY ADJUSTMENT: Level {complexity_tracker.current_complexity} ({complexity_tracker.get_cefr_level()})
 {complexity_instruction}
+
+{vocabulary_instruction}
 
 DO NOT FORMAT YOUR RESPONSE. Just write pure {language_name} text naturally.
 
@@ -358,7 +610,46 @@ def get_languages():
 
 @app.route('/api/scenarios')
 def get_scenarios():
-    return jsonify(SCENARIOS)
+    """Get scenarios with difficulty ratings based on vocabulary requirements"""
+    user_level = vocab_tracker.get_current_cefr_level()
+    mastered_count = len([word for word in vocab_tracker.user_vocab['words'].keys() if vocab_tracker.is_word_mastered(word)])
+
+    # Map scenarios to difficulty
+    scenario_info = []
+    for scenario in SCENARIOS:
+        # Determine difficulty based on scenario
+        if scenario in ["greeting a family member", "introducing yourself to someone new"]:
+            required_level = "A1"
+            required_words = 0  # Complete beginners can start here
+        elif scenario in ["ordering coffee at a café"]:
+            required_level = "A1"
+            required_words = 20  # After basic greetings
+        elif scenario in ["buying vegetables at the market", "ordering food at a restaurant", "shopping for clothes"]:
+            required_level = "A2"
+            required_words = 100
+        elif scenario in ["asking for directions"]:
+            required_level = "A2"
+            required_words = 80
+        else:
+            required_level = "A1"
+            required_words = 0  # Default: allow beginners
+
+        # Check if user is ready
+        level_order = {'A1': 1, 'A2': 2, 'B1': 3}
+        user_level_num = level_order.get(user_level, 1)
+        required_level_num = level_order.get(required_level, 1)
+
+        is_ready = (user_level_num >= required_level_num and mastered_count >= required_words)
+
+        scenario_info.append({
+            'name': scenario,
+            'required_level': required_level,
+            'required_words': required_words,
+            'is_ready': is_ready,
+            'user_progress': mastered_count
+        })
+
+    return jsonify(scenario_info)
 
 
 @app.route('/api/stats')
@@ -380,8 +671,8 @@ def start_conversation():
     lang_config = LANGUAGES.get(language_key, LANGUAGES['telugu'])
     lang_name = lang_config['name']
 
-    # Initialize performance tracker
-    tracker = PerformanceTracker()
+    # Initialize performance tracker with vocabulary tracker
+    tracker = PerformanceTracker(vocab_tracker=vocab_tracker)
 
     # Generate appropriate prompt based on mode
     if mode == 'conversational':
@@ -428,6 +719,135 @@ def start_conversation():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/evaluate-response', methods=['POST'])
+def evaluate_response():
+    """Evaluate if user's response was appropriate using Claude"""
+    data = request.json
+    user_text = data.get('user_text', '')
+    session_id = data.get('session_id', 'default')
+    ai_previous_message = data.get('ai_message', '')
+
+    if session_id not in conversation_state:
+        return jsonify({'success': False, 'error': 'Session not found'}), 404
+
+    session = conversation_state[session_id]
+    lang_name = LANGUAGES[session['language']]['name']
+
+    # Use Claude to evaluate if response was appropriate
+    evaluation_prompt = f"""You are evaluating a language learner's response in {lang_name}.
+
+TUTOR'S PREVIOUS MESSAGE: {ai_previous_message}
+USER'S RESPONSE: {user_text}
+
+Evaluate if the user's response:
+1. Is contextually appropriate (makes sense as a reply)
+2. Shows they understood the tutor's message
+3. Uses correct grammar/vocabulary OR makes minor errors that don't impede comprehension
+
+Respond with ONLY one of these:
+- SUCCESS if the response is appropriate and shows comprehension
+- PARTIAL if the response has significant errors but shows some understanding
+- FAIL if the response is completely inappropriate, gibberish, or shows no comprehension
+
+One word only: SUCCESS, PARTIAL, or FAIL."""
+
+    try:
+        response = anthropic_client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=20,
+            messages=[{
+                "role": "user",
+                "content": evaluation_prompt
+            }]
+        )
+        evaluation = response.content[0].text.strip().upper()
+
+        # Map evaluation to success boolean
+        success = evaluation in ['SUCCESS', 'PARTIAL']
+
+        # Extract words from conversation and track vocabulary exposure
+        lang_config = LANGUAGES[session['language']]
+        script_start, script_end = lang_config['script_range']
+        telugu_words = re.findall(f'[{script_start}-{script_end}]+', ai_previous_message + ' ' + user_text)
+
+        for word in telugu_words:
+            vocab_tracker.record_word_exposure(word, success)
+
+        return jsonify({
+            'success': True,
+            'understood': success,
+            'evaluation': evaluation,
+            'comprehension_rate': vocab_tracker.calculate_known_word_percentage(
+                ai_previous_message, session['tracker'].get_cefr_level()
+            )
+        })
+
+    except Exception as e:
+        print(f"Error evaluating response: {e}")
+        # Default to success if evaluation fails
+        return jsonify({'success': True, 'understood': True, 'evaluation': 'SUCCESS'})
+
+
+@app.route('/api/help-request', methods=['POST'])
+def help_request():
+    """Handle English help requests during conversation"""
+    data = request.json
+    question = data.get('question', '')
+    session_id = data.get('session_id', 'default')
+
+    if session_id not in conversation_state:
+        return jsonify({'success': False, 'error': 'Session not found'}), 404
+
+    session = conversation_state[session_id]
+    lang_name = LANGUAGES[session['language']]['name']
+
+    # Create a help prompt
+    help_prompt = f"""The learner is practicing {lang_name} and has asked an English question: "{question}"
+
+Respond helpfully in the format appropriate for {session['mode']} mode.
+
+If they asked "how do I say X?":
+- Give them the {lang_name} phrase
+- Show transliteration (if guided mode)
+- Show English translation (if guided mode)
+- Keep it simple and encourage them to practice saying it
+
+If they asked "what does X mean?":
+- Explain the {lang_name} word/phrase
+- Give examples of usage
+- Keep explanation clear
+
+Stay in character and be encouraging. This is a teaching moment within the conversation."""
+
+    # Add to conversation history
+    session['history'].append({
+        "role": "user",
+        "content": f"[Learner asks in English: {question}]"
+    })
+
+    try:
+        response = anthropic_client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=512,
+            system=session['system_prompt'],
+            messages=session['history']
+        )
+        ai_text = response.content[0].text
+
+        session['history'].append({
+            "role": "assistant",
+            "content": ai_text
+        })
+
+        return jsonify({
+            'success': True,
+            'message': ai_text
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/continue-conversation', methods=['POST'])
 def continue_conversation():
     """Continue conversation and track performance"""
@@ -445,8 +865,8 @@ def continue_conversation():
     # Track performance
     tracker.record_exchange(success)
 
-    # Update system prompt if complexity changed
-    if tracker.exchanges % 5 == 0:
+    # Update system prompt if complexity changed (check every 15 exchanges)
+    if tracker.exchanges % 15 == 0:
         lang_name = LANGUAGES[session['language']]['name']
         if session['mode'] == 'conversational':
             session['system_prompt'] = generate_conversational_prompt(

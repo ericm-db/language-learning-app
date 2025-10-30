@@ -231,6 +231,23 @@ body {
     transform: translateX(5px);
 }
 
+.scenario-item.locked {
+    opacity: 0.6;
+    background: #e9ecef;
+    cursor: not-allowed;
+}
+
+.scenario-item.locked:hover {
+    background: #e9ecef;
+    color: #333;
+    border-color: transparent;
+    transform: none;
+}
+
+.scenario-item.ready {
+    border-left: 4px solid #51cf66;
+}
+
 /* Conversation Panel */
 .conversation-header {
     display: flex;
@@ -441,6 +458,16 @@ body {
 
 .text-input-container button:hover {
     background: #764ba2;
+}
+
+.help-button {
+    background: #ffd43b !important;
+    color: #333 !important;
+    padding: 12px 18px !important;
+}
+
+.help-button:hover {
+    background: #fcc419 !important;
 }
 
 /* Review Card */
