@@ -1,0 +1,249 @@
+/* Typography-led spike styling: one accent color, light/dark via variables. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #fcfcfd;
+  --surface: #f2f4f6;
+  --fg: #1b1f24;
+  --muted: #5b6470;
+  --border: #dde1e6;
+  --accent: #2563b0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111417;
+    --surface: #1a1f24;
+    --fg: #e8ebee;
+    --muted: #98a2ad;
+    --border: #2b3239;
+    --accent: #6aa3dd;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.te {
+  font-family: 'Noto Sans Telugu', system-ui, sans-serif;
+}
+
+.te-large {
+  font-size: 1.5rem;
+  line-height: 1.9;
+}
+
+.app {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 4rem;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+}
+
+.app-title {
+  margin: 0;
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.spike-tag {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.badge {
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 0.0625rem 0.625rem;
+  font-size: 0.75rem;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.625rem;
+  margin-bottom: 1.5rem;
+}
+
+.session-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
+  min-width: 8.5rem;
+  font-size: 0.875rem;
+}
+
+.session-state-label {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The dot is decorative; the text label is the accessible signal. */
+.dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.dot-armed,
+.dot-listening,
+.dot-translating {
+  background: var(--accent);
+}
+
+.dot-arming,
+.dot-reconnecting,
+.dot-closing {
+  background: var(--accent);
+  opacity: 0.45;
+}
+
+.dot-error {
+  background: var(--fg);
+}
+
+button {
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.875rem;
+  cursor: pointer;
+}
+
+button:hover:enabled {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.debug-toggle {
+  margin-left: auto;
+}
+
+.error-line {
+  margin: 0 0 1.5rem;
+  font-size: 0.875rem;
+  color: var(--fg);
+  border-left: 3px solid var(--accent);
+  padding-left: 0.75rem;
+}
+
+.panes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.5rem;
+}
+
+.pane {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  padding: 1rem 1.25rem;
+  min-height: 16rem;
+}
+
+.pane-title {
+  margin: 0 0 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.pane-line {
+  margin: 0 0 0.875rem;
+}
+
+.pane-line-partial {
+  color: var(--muted);
+}
+
+.debug-panel {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.debug-table {
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.debug-table th,
+.debug-table td {
+  text-align: left;
+  padding: 0.25rem 1.25rem 0.25rem 0;
+}
+
+.debug-table th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.debug-facts {
+  display: flex;
+  gap: 2rem;
+  margin: 0.75rem 0 0;
+  font-size: 0.8125rem;
+}
+
+.debug-facts div {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.debug-facts dt {
+  color: var(--muted);
+}
+
+.debug-facts dd {
+  margin: 0;
+}
+
+@media (max-width: 56rem) {
+  .panes {
+    grid-template-columns: 1fr;
+  }
+}

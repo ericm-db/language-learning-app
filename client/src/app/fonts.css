@@ -1,0 +1,31 @@
+/*
+ * Telugu glyphs use font-display: block (plan §4): a brief blank beats a
+ * tofu flash while Noto Sans Telugu loads. Font files come from the
+ * installed @fontsource/noto-sans-telugu package; Latin text stays on the
+ * system stack, so only the Telugu subset is declared here.
+ */
+@font-face {
+  font-family: 'Noto Sans Telugu';
+  font-style: normal;
+  font-display: block;
+  font-weight: 400;
+  src:
+    url('@fontsource/noto-sans-telugu/files/noto-sans-telugu-telugu-400-normal.woff2')
+      format('woff2'),
+    url('@fontsource/noto-sans-telugu/files/noto-sans-telugu-telugu-400-normal.woff')
+      format('woff');
+  unicode-range: U+0951-0952, U+0964-0965, U+0C00-0C7F, U+1CDA, U+1CF2, U+200C-200D, U+25CC;
+}
+
+@font-face {
+  font-family: 'Noto Sans Telugu';
+  font-style: normal;
+  font-display: block;
+  font-weight: 500;
+  src:
+    url('@fontsource/noto-sans-telugu/files/noto-sans-telugu-telugu-500-normal.woff2')
+      format('woff2'),
+    url('@fontsource/noto-sans-telugu/files/noto-sans-telugu-telugu-500-normal.woff')
+      format('woff');
+  unicode-range: U+0951-0952, U+0964-0965, U+0C00-0C7F, U+1CDA, U+1CF2, U+200C-200D, U+25CC;
+}
