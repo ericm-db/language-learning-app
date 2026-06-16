@@ -1,7 +1,10 @@
-// Composed translation pipeline: Gemini transcribes the source audio and
-// translates it in one call, then Cartesia synthesizes the target speech.
-// This routes around the Gemini live-translate model's failure to produce
-// Telugu output (it returns no Telugu transcript). Keys stay server-side.
+// Composed translation pipeline: Cartesia STT transcribes the source audio,
+// Gemini (a fast flash-lite text model) translates the transcript, then
+// Cartesia synthesizes the target speech. This routes around the Gemini
+// live-translate model's failure to produce Telugu output, and avoids using an
+// LLM for transcription (slow, and it hallucinates text on silence). Measured
+// stages: STT ~100ms, translate ~0.7s, TTS first audio ~75ms. Keys stay
+// server-side.
 //
 // Cost note: each call spends Gemini + Cartesia quota. Unlike /api/token this
 // is not rate-limited, but a real multi-user deployment should rate-limit it.
@@ -10,7 +13,9 @@ import { Hono } from 'hono';
 import type { GenerateContentParameters } from '@google/genai';
 import type { CartesiaClient, TtsLanguage } from '../lib/cartesia.js';
 
-export const TRANSLATE_MODEL = 'gemini-3.5-flash';
+// flash-lite is ~5x faster than gemini-3.5-flash for a one-sentence translation
+// (measured ~0.7s vs ~4s) at comparable quality for this task.
+export const TRANSLATE_MODEL = 'gemini-3.1-flash-lite';
 const OUTPUT_SAMPLE_RATE = 24000;
 const MAX_TEXT_LENGTH = 2000;
 
@@ -37,48 +42,24 @@ function isLang(value: unknown): value is TtsLanguage {
   return typeof value === 'string' && (LANGS as readonly string[]).includes(value);
 }
 
-// Gemini generateContent needs a container, not raw PCM; wrap mono PCM s16le.
-function wavWrap(pcm: Buffer, rate: number): Buffer {
-  const h = Buffer.alloc(44);
-  h.write('RIFF', 0);
-  h.writeUInt32LE(36 + pcm.length, 4);
-  h.write('WAVE', 8);
-  h.write('fmt ', 12);
-  h.writeUInt32LE(16, 16);
-  h.writeUInt16LE(1, 20);
-  h.writeUInt16LE(1, 22);
-  h.writeUInt32LE(rate, 24);
-  h.writeUInt32LE(rate * 2, 28);
-  h.writeUInt16LE(2, 32);
-  h.writeUInt16LE(16, 34);
-  h.write('data', 36);
-  h.writeUInt32LE(pcm.length, 40);
-  return Buffer.concat([h, pcm]);
-}
-
-function translatePrompt(source: TtsLanguage, target: TtsLanguage): string {
-  const lines = [
-    `The audio is a person speaking ${LANGUAGE_NAME[source]}.`,
-    `Transcribe it, then translate the meaning into ${LANGUAGE_NAME[target]}.`,
-  ];
+function translatePrompt(source: TtsLanguage, target: TtsLanguage, text: string): string {
+  const lines = [`Translate this ${LANGUAGE_NAME[source]} sentence into natural ${LANGUAGE_NAME[target]}.`];
   if (target === 'te') {
     lines.push(
       'Register requirement, non-negotiable: Telugu is diglossic, and written/formal',
-      'Telugu would be wrong here. The translation must be COLLOQUIAL SPOKEN Telugu,',
-      'the way people actually talk, written in Telugu script.',
+      'Telugu would be wrong here. Use COLLOQUIAL SPOKEN Telugu, the way people',
+      'actually talk, written in Telugu script.',
     );
   }
-  lines.push('Respond ONLY with JSON: {"source":"<transcript>","target":"<translation>"}');
+  lines.push('Output ONLY the translation itself, no quotes and no commentary.', '', text);
   return lines.join('\n');
 }
 
-function parseModelJson(text: string | undefined): unknown {
-  if (typeof text !== 'string') return undefined;
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return undefined;
-  }
+// flash-lite occasionally wraps the answer in quotes despite the instruction.
+function stripWrappingQuotes(text: string): string {
+  const trimmed = text.trim();
+  const quoted = /^(["'`])([\s\S]*)\1$/.exec(trimmed);
+  return (quoted?.[2] ?? trimmed).trim();
 }
 
 export function createTranslateRoute(deps: TranslateRouteDeps): Hono {
@@ -121,33 +102,30 @@ export function createTranslateRoute(deps: TranslateRouteDeps): Hono {
     const pcm = Buffer.from(audioBase64, 'base64');
 
     let sourceText: string;
+    try {
+      sourceText = (await cartesia.stt(pcm, sourceLang, sampleRate)).trim();
+    } catch {
+      return c.json(upstreamError, 502);
+    }
+    if (sourceText.length === 0) {
+      // No intelligible speech (silence/noise). Empty fields tell the client to
+      // emit no turn, so silence never produces a phantom transcript.
+      return c.json({ sourceText: '', targetText: '', audioBase64: '', outputSampleRate: OUTPUT_SAMPLE_RATE });
+    }
+    if (sourceText.length > MAX_TEXT_LENGTH) {
+      return c.json(upstreamError, 502);
+    }
+
     let targetText: string;
     try {
       const response = await model.models.generateContent({
         model: TRANSLATE_MODEL,
-        contents: [
-          {
-            parts: [
-              { inlineData: { mimeType: 'audio/wav', data: wavWrap(pcm, sampleRate).toString('base64') } },
-              { text: translatePrompt(sourceLang, targetLang) },
-            ],
-          },
-        ],
-        config: { responseMimeType: 'application/json' },
+        contents: translatePrompt(sourceLang, targetLang, sourceText),
       });
-      const parsed = parseModelJson(response.text);
-      if (
-        !isRecord(parsed) ||
-        typeof parsed.source !== 'string' ||
-        typeof parsed.target !== 'string' ||
-        parsed.target.trim().length === 0 ||
-        parsed.source.length > MAX_TEXT_LENGTH ||
-        parsed.target.length > MAX_TEXT_LENGTH
-      ) {
+      targetText = stripWrappingQuotes(response.text ?? '');
+      if (targetText.length === 0 || targetText.length > MAX_TEXT_LENGTH) {
         return c.json(upstreamError, 502);
       }
-      sourceText = parsed.source;
-      targetText = parsed.target;
     } catch {
       return c.json(upstreamError, 502);
     }

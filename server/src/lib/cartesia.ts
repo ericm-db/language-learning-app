@@ -12,8 +12,19 @@ export type TtsLanguage = 'en' | 'te';
 
 /** Structural interface so the translate route and tests can inject a stub. */
 export interface CartesiaClient {
+  /**
+   * Transcribes mono PCM s16le. Returns the transcript, or '' when the audio
+   * had no intelligible speech (real STT returns nothing on silence/noise,
+   * unlike an LLM, which fabricates) so callers can drop the turn.
+   */
+  stt(pcm: Buffer, language: TtsLanguage, sampleRate: number): Promise<string>;
   /** Returns mono PCM s16le at the requested sample rate. */
   tts(text: string, language: TtsLanguage, sampleRate: number): Promise<Buffer>;
+}
+
+// ink-2 is the fastest STT but English-only; ink-whisper is multilingual.
+function sttModel(language: TtsLanguage): string {
+  return language === 'en' ? 'ink-2' : 'ink-whisper';
 }
 
 interface VoiceListEntry {
@@ -63,6 +74,66 @@ class HttpCartesiaClient implements CartesiaClient {
     }
     this.voiceCache.set(language, id);
     return id;
+  }
+
+  stt(pcm: Buffer, language: TtsLanguage, sampleRate: number): Promise<string> {
+    const params = new URLSearchParams({
+      model: sttModel(language),
+      encoding: 'pcm_s16le',
+      sample_rate: String(sampleRate),
+      cartesia_version: CARTESIA_VERSION,
+      language,
+      api_key: this.apiKey,
+    });
+    const url = `wss://api.cartesia.ai/stt/websocket?${params.toString()}`;
+    return new Promise<string>((resolve, reject) => {
+      const ws = new WebSocket(url);
+      const parts: string[] = [];
+      let settled = false;
+      const finish = (run: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          ws.close();
+        } catch {
+          // already closing
+        }
+        run();
+      };
+      const timer = setTimeout(() => finish(() => reject(new Error('Cartesia STT timed out'))), 20000);
+
+      ws.onopen = (): void => {
+        // The whole utterance is already buffered (client-side VAD), so stream
+        // it as 100 ms frames then finalize to flush the tail transcript.
+        const frameBytes = Math.max(2, Math.round(sampleRate * 0.1) * 2);
+        for (let i = 0; i < pcm.length; i += frameBytes) {
+          ws.send(pcm.subarray(i, i + frameBytes));
+        }
+        ws.send('finalize');
+      };
+      ws.onmessage = (event: MessageEvent): void => {
+        const raw =
+          typeof event.data === 'string'
+            ? event.data
+            : Buffer.from(event.data as ArrayBuffer).toString('utf8');
+        let msg: { type?: unknown; text?: unknown };
+        try {
+          msg = JSON.parse(raw) as { type?: unknown; text?: unknown };
+        } catch {
+          return;
+        }
+        if (msg.type === 'transcript' && typeof msg.text === 'string') {
+          parts.push(msg.text);
+        } else if (msg.type === 'error') {
+          finish(() => reject(new Error('Cartesia STT error')));
+        } else if (msg.type === 'flush_done' || msg.type === 'done') {
+          finish(() => resolve(parts.join(' ').replace(/\s+/g, ' ').trim()));
+        }
+      };
+      ws.onerror = (): void => finish(() => reject(new Error('Cartesia STT socket error')));
+      ws.onclose = (): void => finish(() => resolve(parts.join(' ').replace(/\s+/g, ' ').trim()));
+    });
   }
 
   async tts(text: string, language: TtsLanguage, sampleRate: number): Promise<Buffer> {

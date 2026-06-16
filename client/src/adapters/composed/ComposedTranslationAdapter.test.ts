@@ -134,6 +134,20 @@ describe('ComposedTranslationAdapter', () => {
     expect(audio[audio.length - 1]!.seq).toBeLessThan(turn!.seq);
   });
 
+  it('emits nothing for an empty (no-speech) result so silence makes no turn', async () => {
+    const translate = vi.fn<TranslateFn>(async () =>
+      makeResult({ sourceText: '', targetText: '', audioBase64: '' }),
+    );
+    const adapter = new ComposedTranslationAdapter({ translate });
+    await adapter.connect({ target: 'te' });
+    const events = record(adapter);
+    stimulate(adapter);
+    await vi.waitFor(() => expect(translate).toHaveBeenCalled());
+    // Give any (incorrect) emissions a chance to land, then assert none did.
+    await Promise.resolve();
+    expect(events).toHaveLength(0);
+  });
+
   it('infers source en for target te and te for target en', async () => {
     const translate = vi.fn<TranslateFn>(async () => makeResult());
     const adapter = new ComposedTranslationAdapter({ translate });

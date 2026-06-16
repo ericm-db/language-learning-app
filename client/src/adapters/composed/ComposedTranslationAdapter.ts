@@ -174,6 +174,11 @@ export class ComposedTranslationAdapter implements TranslationPort {
     }
     if (!this.isLive(generation)) return; // close() or a newer session superseded this turn
 
+    // No intelligible speech: the server returns empty fields for silence/noise.
+    // Emit no transcript, audio, or turnComplete so the segment produces no turn
+    // (this is what removes phantom transcripts from background noise).
+    if (result.targetText.trim().length === 0) return;
+
     this.emitter.emit('transcript', {
       side: 'input',
       text: result.sourceText,
