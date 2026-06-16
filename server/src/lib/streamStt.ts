@@ -83,59 +83,27 @@ export function openCartesiaSttStream(
   };
 }
 
-/** Telugu STT via Sarvam streaming WebSocket (Indic-specialized). */
-export function openSarvamSttStream(apiKey: string, sampleRate: number): SttStream {
-  const params = new URLSearchParams({
-    'api-subscription-key': apiKey,
-    model: 'saarika:v2.5',
-    language_code: 'te-IN',
-  });
-  const ws = new WebSocket(`wss://api.sarvam.ai/speech-to-text/ws?${params.toString()}`);
-  const parts: string[] = [];
-  const ready = waitOpen(ws);
-
-  // Sarvam expects base64 audio frames wrapped in a JSON data message.
-  const sendAudio = (frame: Buffer): void => {
-    ws.send(JSON.stringify({ audio: { data: frame.toString('base64'), encoding: 'audio/wav', sample_rate: sampleRate } }));
-  };
-  ws.onmessage = (event: MessageEvent): void => {
-    const msg = parseJson(event.data);
-    const text = msg?.data?.transcript ?? msg?.transcript;
-    if (typeof text === 'string') parts.push(text);
-  };
-
+/**
+ * Accumulating STT handle: buffers frames during speech and transcribes the
+ * whole utterance at finalize() via a batch call. Used for Telugu, where
+ * Sarvam's batch STT is verified-accurate and its raw streaming WS protocol is
+ * not (auth/message envelope undocumented). Loses the during-speech overlap but
+ * keeps the relay's server-side endpointing and avoids streaming-WS risk.
+ */
+export function openBatchSttStream(batchStt: (pcm: Buffer) => Promise<string>): SttStream {
+  const frames: Buffer[] = [];
+  let abandoned = false;
   return {
     push: (frame) => {
-      if (ws.readyState === WebSocket.OPEN) sendAudio(frame);
+      if (!abandoned) frames.push(frame);
     },
     finalize: async () => {
-      await ready;
-      return await new Promise<string>((resolve) => {
-        const timer = setTimeout(() => finish(), 8000);
-        const finish = (): void => {
-          clearTimeout(timer);
-          try {
-            ws.close();
-          } catch {
-            // already closing
-          }
-          resolve(accumulate(parts));
-        };
-        ws.onmessage = (event: MessageEvent): void => {
-          const msg = parseJson(event.data);
-          const text = msg?.data?.transcript ?? msg?.transcript;
-          if (typeof text === 'string') parts.push(text);
-        };
-        // Give the tail a moment to transcribe, then close to flush.
-        setTimeout(finish, 600);
-      });
+      if (abandoned || frames.length === 0) return '';
+      return await batchStt(Buffer.concat(frames));
     },
     close: () => {
-      try {
-        ws.close();
-      } catch {
-        // already closing
-      }
+      abandoned = true;
+      frames.length = 0;
     },
   };
 }

@@ -4,9 +4,10 @@
 
 import { getGenAI } from './genai.js';
 import { getCartesia } from './cartesia.js';
+import { getSarvam } from './sarvam.js';
 import type { StreamSessionDeps } from './streamSession.js';
 import type { SttLanguage } from './streamStt.js';
-import { openCartesiaSttStream, openSarvamSttStream } from './streamStt.js';
+import { openCartesiaSttStream, openBatchSttStream } from './streamStt.js';
 
 const TRANSLATE_MODEL = 'gemini-3.1-flash-lite';
 const NAME: Record<SttLanguage, string> = { en: 'English', te: 'Telugu' };
@@ -26,12 +27,11 @@ function translatePrompt(source: SttLanguage, target: SttLanguage, text: string)
 
 export function createStreamDeps(): StreamSessionDeps {
   const cartesiaKey = process.env.CARTESIA_API_KEY ?? '';
-  const sarvamKey = process.env.SARVAM_API_KEY ?? '';
   return {
     openStt: (language, sampleRate) =>
       language === 'en'
         ? openCartesiaSttStream(cartesiaKey, sampleRate)
-        : openSarvamSttStream(sarvamKey, sampleRate),
+        : openBatchSttStream((pcm) => getSarvam().stt(pcm, 'te', sampleRate)),
     translate: async (text, source, target) => {
       const response = await getGenAI().models.generateContent({
         model: TRANSLATE_MODEL,
