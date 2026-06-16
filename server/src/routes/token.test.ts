@@ -113,6 +113,9 @@ describe('POST /api/token', () => {
       getSarvamClient: () => {
         throw new Error('not used');
       },
+      getProgressRepo: () => {
+        throw new Error('not used');
+      },
     });
 
     const res = await app.request('/api/token', {

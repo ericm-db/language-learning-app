@@ -5,6 +5,7 @@ import { WebSocketServer } from 'ws';
 import { assertGenAIConfiguredForProduction, getGenAI } from './lib/genai.js';
 import { assertCartesiaConfiguredForProduction, getCartesia } from './lib/cartesia.js';
 import { assertSarvamConfiguredForProduction, getSarvam } from './lib/sarvam.js';
+import { getProgressRepo } from './lib/db.js';
 import { createApp } from './app.js';
 import { createStreamSession } from './lib/streamSession.js';
 import type { StreamSession } from './lib/streamSession.js';
@@ -32,6 +33,7 @@ if (process.env.NODE_ENV !== 'test') {
     getTranslateModel: getGenAI,
     getCartesiaClient: getCartesia,
     getSarvamClient: getSarvam,
+    getProgressRepo,
   });
   // Warm the Cartesia voice cache so the first translate turn is not cold.
   try {

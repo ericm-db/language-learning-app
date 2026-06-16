@@ -62,7 +62,7 @@ describe('ProgressRepo', () => {
     for (const id of ['p1', 'p2', 'p3']) r.savePhrase(phrase(id));
     const card = (phraseId: string, due: number): Card => ({
       phraseId, due, stability: 1, difficulty: 5, elapsedDays: 0, scheduledDays: 1, reps: 0, lapses: 0,
-      state: 'new', lastReview: null,
+      learningSteps: 0, state: 'new', lastReview: null,
     });
     r.putCard(card('p3', 300));
     r.putCard(card('p1', 100));

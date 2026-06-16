@@ -14,6 +14,7 @@ import { createApp } from '../server/src/app.js';
 import { getGenAI } from '../server/src/lib/genai.js';
 import { getCartesia } from '../server/src/lib/cartesia.js';
 import { getSarvam } from '../server/src/lib/sarvam.js';
+import { getProgressRepo } from '../server/src/lib/db.js';
 
 const app = createApp({
   getTokenClient: getGenAI,
@@ -21,6 +22,8 @@ const app = createApp({
   getTranslateModel: getGenAI,
   getCartesiaClient: getCartesia,
   getSarvamClient: getSarvam,
+  // Progress routes need the persistent volume (Fly); on Vercel they error per-call.
+  getProgressRepo,
 });
 
 export default getRequestListener(app.fetch);

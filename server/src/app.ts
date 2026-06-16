@@ -13,6 +13,8 @@ import { createTranslateRoute } from './routes/translate.js';
 import type { TranslateModelClient } from './routes/translate.js';
 import type { CartesiaClient } from './lib/cartesia.js';
 import type { SarvamSttClient } from './lib/sarvam.js';
+import { createProgressRoutes } from './routes/progress.js';
+import type { ProgressRepo } from './lib/progressRepo.js';
 
 export interface AppDeps {
   getTokenClient: () => TokenMintClient;
@@ -20,6 +22,8 @@ export interface AppDeps {
   getTranslateModel: () => TranslateModelClient;
   getCartesiaClient: () => CartesiaClient;
   getSarvamClient: () => SarvamSttClient;
+  /** Progress DB repo; needs the long-lived server (persistent volume), not serverless. */
+  getProgressRepo: () => ProgressRepo;
   tokenRateLimit?: RateLimitOptions;
 }
 
@@ -51,6 +55,7 @@ export function createApp(deps: AppDeps): Hono {
       getSarvam: deps.getSarvamClient,
     }),
   );
+  app.route('/api/progress', createProgressRoutes({ getRepo: deps.getProgressRepo }));
 
   return app;
 }

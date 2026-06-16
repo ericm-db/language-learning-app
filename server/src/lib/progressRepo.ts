@@ -32,6 +32,7 @@ export interface Card {
   scheduledDays: number;
   reps: number;
   lapses: number;
+  learningSteps: number;
   state: CardFsrsState;
   lastReview: number | null;
 }
@@ -103,14 +104,15 @@ export class ProgressRepo {
   putCard(c: Card): void {
     this.db
       .prepare(
-        `INSERT INTO cards (phrase_id, due, stability, difficulty, elapsed_days, scheduled_days, reps, lapses, state, last_review)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO cards (phrase_id, due, stability, difficulty, elapsed_days, scheduled_days, reps, lapses, learning_steps, state, last_review)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(phrase_id) DO UPDATE SET
            due=excluded.due, stability=excluded.stability, difficulty=excluded.difficulty,
            elapsed_days=excluded.elapsed_days, scheduled_days=excluded.scheduled_days,
-           reps=excluded.reps, lapses=excluded.lapses, state=excluded.state, last_review=excluded.last_review`,
+           reps=excluded.reps, lapses=excluded.lapses, learning_steps=excluded.learning_steps,
+           state=excluded.state, last_review=excluded.last_review`,
       )
-      .run(c.phraseId, c.due, c.stability, c.difficulty, c.elapsedDays, c.scheduledDays, c.reps, c.lapses, c.state, c.lastReview);
+      .run(c.phraseId, c.due, c.stability, c.difficulty, c.elapsedDays, c.scheduledDays, c.reps, c.lapses, c.learningSteps, c.state, c.lastReview);
   }
 
   getCard(phraseId: string): Card | undefined {
@@ -197,7 +199,7 @@ interface PhraseRow {
 }
 interface CardRow {
   phrase_id: string; due: number; stability: number; difficulty: number; elapsed_days: number;
-  scheduled_days: number; reps: number; lapses: number; state: string; last_review: number | null;
+  scheduled_days: number; reps: number; lapses: number; learning_steps: number; state: string; last_review: number | null;
 }
 interface AttemptRow {
   id: string; phrase_id: string | null; session_id: string | null; created_at: number; mode: string;
@@ -220,7 +222,7 @@ function toCard(r: CardRow): Card {
   return {
     phraseId: r.phrase_id, due: r.due, stability: r.stability, difficulty: r.difficulty,
     elapsedDays: r.elapsed_days, scheduledDays: r.scheduled_days, reps: r.reps, lapses: r.lapses,
-    state: r.state as CardFsrsState, lastReview: r.last_review,
+    learningSteps: r.learning_steps, state: r.state as CardFsrsState, lastReview: r.last_review,
   };
 }
 function toAttempt(r: AttemptRow): Attempt {

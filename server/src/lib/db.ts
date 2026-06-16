@@ -6,6 +6,7 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
+import { ProgressRepo } from './progressRepo.js';
 
 const MIGRATION = `
 CREATE TABLE IF NOT EXISTS phrases (
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS cards (
   scheduled_days REAL NOT NULL,
   reps           INTEGER NOT NULL,
   lapses         INTEGER NOT NULL,
+  learning_steps INTEGER NOT NULL DEFAULT 0,
   state          TEXT NOT NULL,
   last_review    INTEGER
 );
@@ -75,4 +77,12 @@ export function getDb(): DatabaseSync {
   migrate(db);
   cached = db;
   return cached;
+}
+
+let cachedRepo: ProgressRepo | undefined;
+
+/** Cached ProgressRepo over the opened DB; one connection for the long-lived server. */
+export function getProgressRepo(): ProgressRepo {
+  if (!cachedRepo) cachedRepo = new ProgressRepo(getDb());
+  return cachedRepo;
 }
