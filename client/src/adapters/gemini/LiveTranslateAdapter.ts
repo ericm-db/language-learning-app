@@ -4,9 +4,12 @@
 // normalized to ports/types.
 //
 // Wire facts come from docs/api-notes.md, checked against the pinned SDK
-// (@google/genai 2.7.0) .d.ts. Where the two disagree the .d.ts wins:
-// - api-notes calls the config field `translationConfig`; SDK 2.7.0 names it
-//   `streamTranslationConfig` (serialized to setup.generationConfig.streamTranslationConfig).
+// (@google/genai 2.7.0) .d.ts AND verified against the live endpoint:
+// - The translation config field is `translationConfig`, as the docs show. The
+//   SDK's typed name `streamTranslationConfig` is REJECTED by the live server
+//   ("Unknown name streamTranslationConfig at setup.generation_config"); the SDK
+//   passes unknown config keys through verbatim, so we attach `translationConfig`
+//   via a cast. A live connect with this key opens and holds the session.
 // - api-notes documents `languageCode` on transcriptions; the SDK Transcription
 //   type omits it, so it is read defensively (see WireTranscription).
 
@@ -206,13 +209,16 @@ export class LiveTranslateAdapter implements TranslationPort {
       responseModalities: [Modality.AUDIO],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
-      streamTranslationConfig: {
-        targetLanguageCode: toBcp47(cfg.target),
-        echoTargetLanguage: cfg.echoTargetLanguage ?? false,
-      },
       ...(this.resumptionHandle !== undefined
         ? { sessionResumption: { handle: this.resumptionHandle } }
         : {}),
+    };
+    // The live wire protocol wants `translationConfig` under generationConfig.
+    // The SDK type only declares `streamTranslationConfig`, which the server
+    // rejects, so attach the correct key via a cast (the SDK forwards it as-is).
+    (config as Record<string, unknown>)['translationConfig'] = {
+      targetLanguageCode: toBcp47(cfg.target),
+      echoTargetLanguage: cfg.echoTargetLanguage ?? false,
     };
     const session = await ai.live.connect({
       model: MODEL_ID,

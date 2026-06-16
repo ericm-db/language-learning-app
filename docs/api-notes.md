@@ -19,12 +19,16 @@ is not in this file or the linked docs, it does not exist — do not invent para
 - Model ID: `gemini-3.5-live-translate-preview`
 - Speech-to-speech only. No system instructions, no tools, no text input.
 
-### CORRECTIONS from @google/genai 2.7.0 .d.ts (the SDK is authoritative over the doc page)
+### CORRECTIONS (verified against the live endpoint, 2026-06-16)
 
-- The docs snippet's `translationConfig` does not exist in SDK 2.7.0. The field is
-  `streamTranslationConfig` (type `StreamTranslationConfig`, same inner fields
-  `targetLanguageCode` / `echoTargetLanguage`), serialized to
-  `setup.generationConfig.streamTranslationConfig`. Adapter uses the SDK name.
+- The translation config field is `translationConfig`, as the doc snippet shows —
+  NOT the SDK type's `streamTranslationConfig`. A live connect with
+  `streamTranslationConfig` opens the socket then immediately closes with
+  "Unknown name streamTranslationConfig at setup.generation_config". A connect with
+  `translationConfig` opens and holds. The SDK forwards unknown config keys verbatim,
+  so the adapter attaches `translationConfig` via a cast (the SDK type omits it).
+  (An earlier note here claimed the reverse, trusting the .d.ts type name over the
+  doc page; the live server disproved it.)
 - The SDK `Transcription` type is `{ text?, finished? }` — no `languageCode` despite the
   doc page. Adapter reads `languageCode` defensively (falls back to lang 'unknown') and
   maps `finished` to `TranscriptDelta.final`.

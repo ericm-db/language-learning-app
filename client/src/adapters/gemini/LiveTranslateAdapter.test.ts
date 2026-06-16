@@ -39,7 +39,7 @@ describe('LiveTranslateAdapter', () => {
         responseModalities: ['AUDIO'],
         inputAudioTranscription: {},
         outputAudioTranscription: {},
-        streamTranslationConfig: { targetLanguageCode: 'te', echoTargetLanguage: true },
+        translationConfig: { targetLanguageCode: 'te', echoTargetLanguage: true },
       });
       expect(session.clientOptions).toEqual({
         apiKey: 'token-1',
@@ -50,7 +50,7 @@ describe('LiveTranslateAdapter', () => {
     it('defaults echoTargetLanguage to false and maps target en through the BCP-47 table', async () => {
       const { adapter } = makeAdapter();
       await adapter.connect({ target: 'en' });
-      expect(fakeLive.latest().params.config['streamTranslationConfig']).toEqual({
+      expect(fakeLive.latest().params.config['translationConfig']).toEqual({
         targetLanguageCode: 'en',
         echoTargetLanguage: false,
       });
