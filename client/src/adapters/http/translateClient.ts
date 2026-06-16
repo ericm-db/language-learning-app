@@ -3,7 +3,7 @@
 // only transport the composed adapter is wired to in production; tests inject a
 // deterministic fake instead. Mirrors CoachClient's error-handling shape.
 
-import type { TranslateFn, TranslateRequest, TranslateResult } from '../composed/types';
+import type { TranslateFn, TranslateRequest, TranslateResult, TranslateTimings } from '../composed/types';
 
 export class TranslateApiError extends Error {
   readonly status: number;
@@ -19,7 +19,7 @@ function parseResult(status: number, body: unknown): TranslateResult {
   if (typeof body !== 'object' || body === null) {
     throw new TranslateApiError(status, '/api/translate returned a non-object body');
   }
-  const { sourceText, targetText, audioBase64, outputSampleRate } = body as Record<string, unknown>;
+  const { sourceText, targetText, audioBase64, outputSampleRate, timings } = body as Record<string, unknown>;
   if (
     typeof sourceText !== 'string' ||
     typeof targetText !== 'string' ||
@@ -28,7 +28,20 @@ function parseResult(status: number, body: unknown): TranslateResult {
   ) {
     throw new TranslateApiError(status, '/api/translate returned a malformed body');
   }
-  return { sourceText, targetText, audioBase64, outputSampleRate };
+  const result: TranslateResult = { sourceText, targetText, audioBase64, outputSampleRate };
+  if (isTimings(timings)) result.timings = timings;
+  return result;
+}
+
+function isTimings(value: unknown): value is TranslateTimings {
+  if (typeof value !== 'object' || value === null) return false;
+  const t = value as Record<string, unknown>;
+  return (
+    typeof t.sttMs === 'number' &&
+    typeof t.translateMs === 'number' &&
+    typeof t.ttsMs === 'number' &&
+    typeof t.totalMs === 'number'
+  );
 }
 
 export function createTranslateClient(): TranslateFn {

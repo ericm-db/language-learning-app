@@ -48,6 +48,11 @@ const initialSnapshot: Partial<DrillStoreState> = {
     t_chunk_sent: { samples: [], p50: null, p95: null, count: 0 },
     t_first_transcript: { samples: [], p50: null, p95: null, count: 0 },
     t_first_audio: { samples: [], p50: null, p95: null, count: 0 },
+    srv_stt: { samples: [], p50: null, p95: null, count: 0 },
+    srv_translate: { samples: [], p50: null, p95: null, count: 0 },
+    srv_tts: { samples: [], p50: null, p95: null, count: 0 },
+    net_overhead: { samples: [], p50: null, p95: null, count: 0 },
+    round_trip: { samples: [], p50: null, p95: null, count: 0 },
   },
   lastError: null,
 };

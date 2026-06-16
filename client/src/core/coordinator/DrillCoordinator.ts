@@ -252,6 +252,11 @@ export function createDrillCoordinator(deps: DrillCoordinatorDeps): DrillCoordin
       session.port.on('turnComplete', guard(onTurnComplete)),
       session.port.on('state', guard(onPortState)),
       session.port.on('error', guard(onPortError)),
+      // Forward pipeline-adapter profiling samples as Metric events.
+      session.port.on(
+        'timing',
+        guard((sample) => emitMetric(sample.stage, utterance?.id ?? 'turn', sample.ms)),
+      ),
     );
   }
 

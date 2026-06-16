@@ -54,7 +54,18 @@ export interface CaptureReady {
 }
 
 // Latency instrumentation (plan §2.1) — defined from the start, never removed.
-export type MetricName = 't_chunk_sent' | 't_first_audio' | 't_first_transcript';
+// The t_* metrics are anchored at speech start (they include speech duration).
+// The srv_*/net/round_trip metrics are the per-turn pipeline breakdown forwarded
+// from a pipeline adapter's TimingSample events — the meaningful profiling.
+export type MetricName =
+  | 't_chunk_sent'
+  | 't_first_audio'
+  | 't_first_transcript'
+  | 'srv_stt'
+  | 'srv_translate'
+  | 'srv_tts'
+  | 'net_overhead'
+  | 'round_trip';
 
 export interface MetricEvent {
   type: 'Metric';

@@ -3,6 +3,7 @@ import type {
   PcmChunk,
   PortError,
   PortSessionState,
+  TimingSample,
   TranscriptDelta,
   TranslationCapabilities,
   Unsubscribe,
@@ -22,6 +23,8 @@ export interface TranslationPortEvents {
   state: { state: PortSessionState; detail?: string };
   /** Adapter signals the model finished a translation turn (finalization boundary). */
   turnComplete: void;
+  /** Optional latency profiling: per-stage durations from a pipeline adapter. */
+  timing: TimingSample;
   error: PortError;
 }
 

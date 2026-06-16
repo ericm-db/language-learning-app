@@ -29,6 +29,11 @@ export const METRIC_NAMES: readonly MetricName[] = [
   't_chunk_sent',
   't_first_transcript',
   't_first_audio',
+  'srv_stt',
+  'srv_translate',
+  'srv_tts',
+  'net_overhead',
+  'round_trip',
 ];
 
 export const MAX_METRIC_SAMPLES = 50;
@@ -101,6 +106,11 @@ export const useDrillStore = create<DrillStoreState>()((set, get) => {
       t_chunk_sent: emptyStats(),
       t_first_transcript: emptyStats(),
       t_first_audio: emptyStats(),
+      srv_stt: emptyStats(),
+      srv_translate: emptyStats(),
+      srv_tts: emptyStats(),
+      net_overhead: emptyStats(),
+      round_trip: emptyStats(),
     },
     lastError: null,
 

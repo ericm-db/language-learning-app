@@ -35,6 +35,11 @@ const knownState: Partial<DrillStoreState> = {
     t_chunk_sent: { samples: [5], p50: 5, p95: 5, count: 1 },
     t_first_transcript: { samples: [120], p50: 120, p95: 120, count: 1 },
     t_first_audio: { samples: [340], p50: 340, p95: 340, count: 1 },
+    srv_stt: { samples: [800], p50: 800, p95: 800, count: 1 },
+    srv_translate: { samples: [650], p50: 650, p95: 650, count: 1 },
+    srv_tts: { samples: [300], p50: 300, p95: 300, count: 1 },
+    net_overhead: { samples: [90], p50: 90, p95: 90, count: 1 },
+    round_trip: { samples: [1840], p50: 1840, p95: 1840, count: 1 },
   },
   lastError: null,
 };

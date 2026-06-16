@@ -21,7 +21,7 @@ import type {
 } from '../../ports/types';
 import type { EndpointerConfig } from './vad';
 import { createEndpointer, type Endpointer } from './vad';
-import type { TranslateFn } from './types';
+import type { TranslateFn, TranslateTimings } from './types';
 
 const INPUT_RATE = 16000;
 const OUTPUT_RATE = 24000;
@@ -158,8 +158,19 @@ export class ComposedTranslationAdapter implements TranslationPort {
     return generation === this.generation && this.sessionState === 'open';
   }
 
+  private emitTimings(timings: TranslateTimings | undefined, roundTripMs: number): void {
+    if (timings !== undefined) {
+      this.emitter.emit('timing', { stage: 'srv_stt', ms: timings.sttMs });
+      this.emitter.emit('timing', { stage: 'srv_translate', ms: timings.translateMs });
+      this.emitter.emit('timing', { stage: 'srv_tts', ms: timings.ttsMs });
+      this.emitter.emit('timing', { stage: 'net_overhead', ms: Math.max(0, roundTripMs - timings.totalMs) });
+    }
+    this.emitter.emit('timing', { stage: 'round_trip', ms: roundTripMs });
+  }
+
   private async runTurn(pcm: Int16Array, generation: number): Promise<void> {
     let result;
+    const reqSent = performance.now();
     try {
       result = await this.translate({
         sourceLang: this.source,
@@ -173,6 +184,9 @@ export class ComposedTranslationAdapter implements TranslationPort {
       return;
     }
     if (!this.isLive(generation)) return; // close() or a newer session superseded this turn
+
+    // Profile every completed call (including no-speech turns).
+    this.emitTimings(result.timings, performance.now() - reqSent);
 
     // No intelligible speech: the server returns empty fields for silence/noise.
     // Emit no transcript, audio, or turnComplete so the segment produces no turn
