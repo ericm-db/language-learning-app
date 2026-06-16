@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { assertGenAIConfiguredForProduction, getGenAI } from './lib/genai.js';
 import { assertCartesiaConfiguredForProduction, getCartesia } from './lib/cartesia.js';
+import { assertSarvamConfiguredForProduction, getSarvam } from './lib/sarvam.js';
 import { createApp } from './app.js';
 
 export { createApp } from './app.js';
@@ -20,11 +21,13 @@ if (process.env.NODE_ENV !== 'production') {
 if (process.env.NODE_ENV !== 'test') {
   assertGenAIConfiguredForProduction();
   assertCartesiaConfiguredForProduction();
+  assertSarvamConfiguredForProduction();
   const app = createApp({
     getTokenClient: getGenAI,
     getCoachClient: getGenAI,
     getTranslateModel: getGenAI,
     getCartesiaClient: getCartesia,
+    getSarvamClient: getSarvam,
   });
   // Warm the Cartesia voice cache so the first translate turn is not cold.
   try {

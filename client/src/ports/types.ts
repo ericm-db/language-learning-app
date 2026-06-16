@@ -48,6 +48,20 @@ export interface TranslationCapabilities {
 
 export type Unsubscribe = () => void;
 
+// Latency profiling. Adapters that run a multi-stage pipeline can report where
+// time went; the coordinator forwards these as Metric events. Provider-neutral.
+export type TimingStage =
+  | 'srv_stt'
+  | 'srv_translate'
+  | 'srv_tts'
+  | 'net_overhead'
+  | 'round_trip';
+
+export interface TimingSample {
+  stage: TimingStage;
+  ms: number;
+}
+
 // --- Persistence DTOs (entities in core/ wrap these with behavior) ---
 
 export interface SavedPhrase {

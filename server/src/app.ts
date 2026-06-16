@@ -12,12 +12,14 @@ import type { CoachModelClient } from './routes/coach.js';
 import { createTranslateRoute } from './routes/translate.js';
 import type { TranslateModelClient } from './routes/translate.js';
 import type { CartesiaClient } from './lib/cartesia.js';
+import type { SarvamSttClient } from './lib/sarvam.js';
 
 export interface AppDeps {
   getTokenClient: () => TokenMintClient;
   getCoachClient: () => CoachModelClient;
   getTranslateModel: () => TranslateModelClient;
   getCartesiaClient: () => CartesiaClient;
+  getSarvamClient: () => SarvamSttClient;
   tokenRateLimit?: RateLimitOptions;
 }
 
@@ -43,7 +45,11 @@ export function createApp(deps: AppDeps): Hono {
   app.route('/api/coach', createCoachRoutes(deps.getCoachClient));
   app.route(
     '/api/translate',
-    createTranslateRoute({ getModel: deps.getTranslateModel, getCartesia: deps.getCartesiaClient }),
+    createTranslateRoute({
+      getModel: deps.getTranslateModel,
+      getCartesia: deps.getCartesiaClient,
+      getSarvam: deps.getSarvamClient,
+    }),
   );
 
   return app;

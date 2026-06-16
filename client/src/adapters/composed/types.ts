@@ -14,12 +14,22 @@ export interface TranslateRequest {
   sampleRate: number;
 }
 
+/** Per-stage server timings (ms) for latency profiling. */
+export interface TranslateTimings {
+  sttMs: number;
+  translateMs: number;
+  ttsMs: number;
+  totalMs: number;
+}
+
 export interface TranslateResult {
   sourceText: string;
   targetText: string;
   /** Base64 of mono PCM s16le at outputSampleRate (the translated speech). */
   audioBase64: string;
   outputSampleRate: number;
+  /** Present when the server reports profiling; absent on older responses. */
+  timings?: TranslateTimings;
 }
 
 /**

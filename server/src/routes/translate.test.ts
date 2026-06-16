@@ -4,6 +4,7 @@ import type { GenerateContentParameters } from '@google/genai';
 import { createTranslateRoute } from './translate.js';
 import type { TranslateModelClient } from './translate.js';
 import type { CartesiaClient, TtsLanguage } from '../lib/cartesia.js';
+import type { SarvamSttClient } from '../lib/sarvam.js';
 
 interface StubModel extends TranslateModelClient {
   calls: GenerateContentParameters[];
@@ -48,10 +49,29 @@ function stubCartesia(opts: { sttText: string; ttsPcm: Buffer }): StubCartesia {
   };
 }
 
-function app(model: TranslateModelClient, cartesia: CartesiaClient): Hono {
+interface StubSarvam extends SarvamSttClient {
+  calls: Array<{ pcm: Buffer; language: 'te'; sampleRate: number }>;
+}
+
+function stubSarvam(transcript: string): StubSarvam {
+  const calls: StubSarvam['calls'] = [];
+  return {
+    calls,
+    stt: (pcm, language, sampleRate) => {
+      calls.push({ pcm, language, sampleRate });
+      return Promise.resolve(transcript);
+    },
+  };
+}
+
+function app(model: TranslateModelClient, cartesia: CartesiaClient, sarvam?: SarvamSttClient): Hono {
   return new Hono().route(
     '/api/translate',
-    createTranslateRoute({ getModel: () => model, getCartesia: () => cartesia }),
+    createTranslateRoute({
+      getModel: () => model,
+      getCartesia: () => cartesia,
+      getSarvam: () => sarvam ?? stubSarvam('telugu transcript'),
+    }),
   );
 }
 
@@ -79,11 +99,18 @@ describe('POST /api/translate', () => {
 
     const res = await post(app(model, cartesia), validBody);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json).toMatchObject({
       sourceText: 'Where is the station?',
       targetText: 'స్టేషన్ ఎక్కడ?',
       audioBase64: ttsPcm.toString('base64'),
       outputSampleRate: 24000,
+    });
+    expect(json.timings).toMatchObject({
+      sttMs: expect.any(Number),
+      translateMs: expect.any(Number),
+      ttsMs: expect.any(Number),
+      totalMs: expect.any(Number),
     });
 
     // STT gets the decoded audio and source language.
@@ -97,6 +124,23 @@ describe('POST /api/translate', () => {
     expect(cartesia.ttsCalls).toEqual([{ text: 'స్టేషన్ ఎక్కడ?', language: 'te', sampleRate: 24000 }]);
   });
 
+  it('routes Telugu-source audio to Sarvam STT, not Cartesia', async () => {
+    const model = stubModel('How are you?');
+    const cartesia = stubCartesia({ sttText: 'should not be used', ttsPcm: Buffer.from([7]) });
+    const sarvam = stubSarvam('మీరు ఎలా ఉన్నారు?');
+    const res = await post(app(model, cartesia, sarvam), {
+      sourceLang: 'te',
+      targetLang: 'en',
+      audioBase64: PCM.toString('base64'),
+      sampleRate: 16000,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ sourceText: 'మీరు ఎలా ఉన్నారు?', targetText: 'How are you?' });
+    expect(sarvam.calls).toEqual([{ pcm: PCM, language: 'te', sampleRate: 16000 }]);
+    // English-direction TTS still runs, but Cartesia STT must not be used for Telugu.
+    expect(cartesia.sttCalls).toHaveLength(0);
+  });
+
   it('strips wrapping quotes from the model output', async () => {
     const cartesia = stubCartesia({ sttText: 'hello', ttsPcm: Buffer.from([0]) });
     const res = await post(app(stubModel('"హలో"'), cartesia), validBody);
@@ -108,7 +152,7 @@ describe('POST /api/translate', () => {
     const cartesia = stubCartesia({ sttText: '   ', ttsPcm: Buffer.from([9]) });
     const res = await post(app(model, cartesia), validBody);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ sourceText: '', targetText: '', audioBase64: '', outputSampleRate: 24000 });
+    expect(await res.json()).toMatchObject({ sourceText: '', targetText: '', audioBase64: '', outputSampleRate: 24000 });
     expect(model.calls).toHaveLength(0);
     expect(cartesia.ttsCalls).toHaveLength(0);
   });

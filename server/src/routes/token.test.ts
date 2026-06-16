@@ -110,6 +110,9 @@ describe('POST /api/token', () => {
       getCartesiaClient: () => {
         throw new Error('not used');
       },
+      getSarvamClient: () => {
+        throw new Error('not used');
+      },
     });
 
     const res = await app.request('/api/token', {

@@ -12,6 +12,7 @@
 import { Hono } from 'hono';
 import type { GenerateContentParameters } from '@google/genai';
 import type { CartesiaClient, TtsLanguage } from '../lib/cartesia.js';
+import type { SarvamSttClient } from '../lib/sarvam.js';
 
 // flash-lite is ~5x faster than gemini-3.5-flash for a one-sentence translation
 // (measured ~0.7s vs ~4s) at comparable quality for this task.
@@ -29,6 +30,8 @@ export interface TranslateModelClient {
 export interface TranslateRouteDeps {
   getModel: () => TranslateModelClient;
   getCartesia: () => CartesiaClient;
+  /** Indic-specialized STT for Telugu-source audio (Cartesia is poor at Telugu). */
+  getSarvam: () => SarvamSttClient;
 }
 
 const LANGS: readonly TtsLanguage[] = ['en', 'te'];
@@ -51,7 +54,14 @@ function translatePrompt(source: TtsLanguage, target: TtsLanguage, text: string)
       'actually talk, written in Telugu script.',
     );
   }
-  lines.push('Output ONLY the translation itself, no quotes and no commentary.', '', text);
+  lines.push(
+    'Output ONLY the translation itself: no quotes, no commentary, no explanation.',
+    'Never describe or judge the input. If the input is unclear, garbled, or not a',
+    'meaningful sentence, output your best literal translation of whatever is there',
+    '- never a sentence about the input.',
+    '',
+    text,
+  );
   return lines.join('\n');
 }
 
@@ -92,31 +102,48 @@ export function createTranslateRoute(deps: TranslateRouteDeps): Hono {
 
     let model: TranslateModelClient;
     let cartesia: CartesiaClient;
+    let sarvam: SarvamSttClient;
     try {
       model = deps.getModel();
       cartesia = deps.getCartesia();
+      sarvam = deps.getSarvam();
     } catch {
       return c.json({ error: 'Server is not configured' }, 500);
     }
 
     const pcm = Buffer.from(audioBase64, 'base64');
+    const started = Date.now();
 
+    // STT by source language: Cartesia is fast/accurate for English; Sarvam's
+    // Indic model is far better for Telugu (Cartesia garbles it).
     let sourceText: string;
+    const sttStart = Date.now();
     try {
-      sourceText = (await cartesia.stt(pcm, sourceLang, sampleRate)).trim();
+      sourceText =
+        sourceLang === 'te'
+          ? (await sarvam.stt(pcm, 'te', sampleRate)).trim()
+          : (await cartesia.stt(pcm, sourceLang, sampleRate)).trim();
     } catch {
       return c.json(upstreamError, 502);
     }
+    const sttMs = Date.now() - sttStart;
     if (sourceText.length === 0) {
       // No intelligible speech (silence/noise). Empty fields tell the client to
       // emit no turn, so silence never produces a phantom transcript.
-      return c.json({ sourceText: '', targetText: '', audioBase64: '', outputSampleRate: OUTPUT_SAMPLE_RATE });
+      return c.json({
+        sourceText: '',
+        targetText: '',
+        audioBase64: '',
+        outputSampleRate: OUTPUT_SAMPLE_RATE,
+        timings: { sttMs, translateMs: 0, ttsMs: 0, totalMs: Date.now() - started },
+      });
     }
     if (sourceText.length > MAX_TEXT_LENGTH) {
       return c.json(upstreamError, 502);
     }
 
     let targetText: string;
+    const translateStart = Date.now();
     try {
       const response = await model.models.generateContent({
         model: TRANSLATE_MODEL,
@@ -129,19 +156,27 @@ export function createTranslateRoute(deps: TranslateRouteDeps): Hono {
     } catch {
       return c.json(upstreamError, 502);
     }
+    const translateMs = Date.now() - translateStart;
 
     let audio: Buffer;
+    const ttsStart = Date.now();
     try {
       audio = await cartesia.tts(targetText, targetLang, OUTPUT_SAMPLE_RATE);
     } catch {
       return c.json(upstreamError, 502);
     }
+    const ttsMs = Date.now() - ttsStart;
+    const totalMs = Date.now() - started;
+
+    // Server-side profiling line (visible in dev terminal and prod logs).
+    console.log(`[translate] ${sourceLang}->${targetLang} stt=${sttMs}ms mt=${translateMs}ms tts=${ttsMs}ms total=${totalMs}ms`);
 
     return c.json({
       sourceText,
       targetText,
       audioBase64: audio.toString('base64'),
       outputSampleRate: OUTPUT_SAMPLE_RATE,
+      timings: { sttMs, translateMs, ttsMs, totalMs },
     });
   });
 
