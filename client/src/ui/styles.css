@@ -116,6 +116,11 @@ body {
   color: var(--fg);
 }
 
+.status-hint-go {
+  font-weight: 600;
+  color: var(--accent);
+}
+
 .latency-readout {
   color: var(--muted);
   font-variant-numeric: tabular-nums;

@@ -20,6 +20,8 @@ export interface CartesiaClient {
   stt(pcm: Buffer, language: TtsLanguage, sampleRate: number): Promise<string>;
   /** Returns mono PCM s16le at the requested sample rate. */
   tts(text: string, language: TtsLanguage, sampleRate: number): Promise<Buffer>;
+  /** Optional: pre-resolve voices so the first real request is not cold. */
+  warm?(): Promise<void>;
 }
 
 // ink-2 is the fastest STT but English-only; ink-whisper is multilingual.
@@ -74,6 +76,12 @@ class HttpCartesiaClient implements CartesiaClient {
     }
     this.voiceCache.set(language, id);
     return id;
+  }
+
+  async warm(): Promise<void> {
+    // Resolve both voices up front; the first real STT/TTS then skips the
+    // voice-list fetch (the dominant cold-start cost, ~0.5-0.9s).
+    await Promise.allSettled([this.resolveVoice('en'), this.resolveVoice('te')]);
   }
 
   stt(pcm: Buffer, language: TtsLanguage, sampleRate: number): Promise<string> {

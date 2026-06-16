@@ -190,6 +190,7 @@ function recordEvents(coordinator: DrillCoordinator): DomainEvent[] {
     'UtteranceFinalized',
     'SessionStateChanged',
     'SessionError',
+    'CaptureReady',
     'Metric',
   ] as const;
   for (const name of names) coordinator.on(name, (e) => events.push(e));
@@ -303,6 +304,19 @@ describe('createDrillCoordinator', () => {
     const startedIds = ofType(events, 'UtteranceStarted').map((e) => e.utteranceId);
     expect(startedIds).toHaveLength(2);
     expect(startedIds[1]).not.toBe(id);
+  });
+
+  it('emits CaptureReady once when the first captured chunk flows', async () => {
+    const { coordinator, captureStub, events } = setup();
+    await coordinator.arm({ source: 'en', target: 'te' });
+    await coordinator.startListening();
+    expect(ofType(events, 'CaptureReady')).toHaveLength(0); // not until audio flows
+
+    captureStub.push(chunk());
+    await tick();
+    captureStub.push(chunk());
+    await tick();
+    expect(ofType(events, 'CaptureReady')).toHaveLength(1); // exactly once, not per chunk
   });
 
   it('uses capabilities().inputRate for capture, never a hardcoded rate', async () => {

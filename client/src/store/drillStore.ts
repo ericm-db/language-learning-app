@@ -52,6 +52,8 @@ function errorMessage(err: unknown): string {
 
 export interface DrillStoreState {
   coordinatorState: CoordinatorState;
+  /** True once the mic is actually capturing audio: the real "speak now" cue. */
+  micReady: boolean;
   direction: TranslationDirection;
   utterances: UtteranceRow[];
   /** Streaming transcript text for the in-flight utterance. */
@@ -90,6 +92,7 @@ export const useDrillStore = create<DrillStoreState>()((set, get) => {
 
   return {
     coordinatorState: 'idle',
+    micReady: false,
     direction: { source: 'en', target: 'te' },
     utterances: [],
     partialInput: '',
@@ -109,8 +112,15 @@ export const useDrillStore = create<DrillStoreState>()((set, get) => {
 
       unsubscribes.push(
         coordinator.on('SessionStateChanged', (event) => {
-          set({ coordinatorState: event.state, direction: coordinator.direction() });
+          const listening = event.state === 'listening' || event.state === 'translating';
+          set((s) => ({
+            coordinatorState: event.state,
+            direction: coordinator.direction(),
+            // micReady survives listening<->translating; cleared once we leave.
+            micReady: listening ? s.micReady : false,
+          }));
         }),
+        coordinator.on('CaptureReady', () => set({ micReady: true })),
         coordinator.on('UtteranceStarted', (event) => {
           set((state) => ({
             utterances: [

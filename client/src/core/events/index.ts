@@ -45,6 +45,14 @@ export interface SessionError {
   tMs: number;
 }
 
+// Fires once per listening session when the first captured audio chunk actually
+// flows, i.e. the mic/worklet is live. This is the honest "you can speak now"
+// moment; the 'listening' state precedes it by the capture warm-up.
+export interface CaptureReady {
+  type: 'CaptureReady';
+  tMs: number;
+}
+
 // Latency instrumentation (plan §2.1) — defined from the start, never removed.
 export type MetricName = 't_chunk_sent' | 't_first_audio' | 't_first_transcript';
 
@@ -64,6 +72,7 @@ export type DomainEvent =
   | UtteranceFinalized
   | SessionStateChanged
   | SessionError
+  | CaptureReady
   | MetricEvent;
 
 export interface DomainEventMap {
@@ -73,5 +82,6 @@ export interface DomainEventMap {
   UtteranceFinalized: UtteranceFinalized;
   SessionStateChanged: SessionStateChanged;
   SessionError: SessionError;
+  CaptureReady: CaptureReady;
   Metric: MetricEvent;
 }

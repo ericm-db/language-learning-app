@@ -289,8 +289,14 @@ export function createDrillCoordinator(deps: DrillCoordinatorDeps): DrillCoordin
     micOn = true;
     const generation = ++pumpGeneration;
     void (async () => {
+      let firstChunk = true;
       for await (const chunk of chunks) {
         if (generation !== pumpGeneration) break;
+        if (firstChunk) {
+          firstChunk = false;
+          // Mic is live now (capture warm-up done): the real "speak now" moment.
+          emitter.emit('CaptureReady', { type: 'CaptureReady', tMs: now() });
+        }
         sendChunk(chunk);
       }
     })();

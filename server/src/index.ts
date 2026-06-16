@@ -26,6 +26,12 @@ if (process.env.NODE_ENV !== 'test') {
     getTranslateModel: getGenAI,
     getCartesiaClient: getCartesia,
   });
+  // Warm the Cartesia voice cache so the first translate turn is not cold.
+  try {
+    void getCartesia().warm?.();
+  } catch {
+    // No key in dev: warming is skipped, requests still lazy-error as before.
+  }
   const port = Number(process.env.PORT ?? 8787);
   serve({ fetch: app.fetch, port }, (info) => {
     console.log(`telugu-practice server listening on :${info.port}`);

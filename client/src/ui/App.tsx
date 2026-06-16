@@ -33,6 +33,7 @@ export function App({ playback }: AppProps): ReactElement {
   const stopListening = useDrillStore((s) => s.stopListening);
   const toggleDirection = useDrillStore((s) => s.toggleDirection);
   const reportError = useDrillStore((s) => s.reportError);
+  const micReady = useDrillStore((s) => s.micReady);
   // Most recent first-audio sample: a real, on-screen "how long did that take"
   // so a normal multi-second lag reads as working, not hung.
   const lastFirstAudioMs = useDrillStore((s) => {
@@ -42,6 +43,18 @@ export function App({ playback }: AppProps): ReactElement {
   const [debugOpen, setDebugOpen] = useState(false);
 
   const offline = import.meta.env.VITE_TRANSLATION === 'fake';
+
+  // While listening, the bare state is misleading: the mic takes a moment to go
+  // live, and speaking before it does drops your first words. Gate the cue on
+  // the real CaptureReady signal.
+  const listeningState = coordinatorState === 'listening' || coordinatorState === 'translating';
+  const statusText =
+    listeningState && !micReady
+      ? 'Starting the mic, wait...'
+      : listeningState && micReady
+        ? 'Speak now.'
+        : STATUS_HINT[coordinatorState];
+  const speakNow = listeningState && micReady;
 
   const canArm = coordinatorState === 'idle' || coordinatorState === 'error';
   const canStart = coordinatorState === 'armed';
@@ -90,8 +103,8 @@ export function App({ playback }: AppProps): ReactElement {
         </button>
       </section>
 
-      <p className="status-hint" aria-live="polite">
-        {STATUS_HINT[coordinatorState]}
+      <p className={`status-hint${speakNow ? ' status-hint-go' : ''}`} aria-live="polite">
+        {statusText}
         {lastFirstAudioMs !== null ? (
           <span className="latency-readout">
             {' '}
