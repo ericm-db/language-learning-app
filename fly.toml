@@ -5,6 +5,15 @@ primary_region = "sjc"
 [build]
   dockerfile = "Dockerfile"
 
+[env]
+  # Progress SQLite DB lives on the mounted volume so it survives deploys.
+  DATA_DIR = "/data"
+
+[mounts]
+  # Create once: fly volumes create telugu_data --size 1
+  source = "telugu_data"
+  destination = "/data"
+
 [http_service]
   # Must match the Dockerfile EXPOSE and the port the app listens on.
   # Fly sets PORT to internal_port by default; the app reads process.env.PORT.

@@ -6,3 +6,8 @@ dist/
 *.log
 .DS_Store
 coverage/
+# Local progress DB (server-side SQLite); real data lives on the Fly volume.
+*.db
+*.db-wal
+*.db-shm
+server/data/
