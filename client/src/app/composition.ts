@@ -7,18 +7,20 @@ import { WorkletCapture } from '../adapters/webaudio/WorkletCapture';
 import { FakeTranslationAdapter } from '../adapters/fake/FakeTranslationAdapter';
 import { LiveTranslateAdapter } from '../adapters/gemini/LiveTranslateAdapter';
 import { ComposedTranslationAdapter } from '../adapters/composed/ComposedTranslationAdapter';
+import { StreamingTranslationAdapter } from '../adapters/stream/StreamingTranslationAdapter';
 import { createTranslateClient } from '../adapters/http/translateClient';
 import { initTokenPrefetch, tokenProvider } from '../adapters/http/tokenProvider';
 import { createDrillCoordinator } from '../core/coordinator/DrillCoordinator';
 import type { TranslationPort } from '../ports/TranslationPort';
 import { useDrillStore } from '../store/drillStore';
 
-// 'cartesia' (default): composed STT->translate->TTS via /api/translate. This
-//   is the path that works for English->Telugu (the Gemini live model does not).
-// 'gemini': direct Gemini live-translate. Near-instant, but only Telugu->English
-//   produces usable output; English->Telugu returns no Telugu.
+// 'stream': low-latency WebSocket relay (Step 2). Streams audio to the server,
+//   which endpoints and streams results back. Needs the long-lived server (Fly).
+// 'cartesia' (default): composed STT->translate->TTS via /api/translate (turn-
+//   based; works on serverless too). The path that works for English->Telugu.
+// 'gemini': direct Gemini live-translate. Only Telugu->English is usable.
 // 'fake': deterministic offline adapter, zero quota.
-type TranslationMode = 'fake' | 'gemini' | 'cartesia';
+type TranslationMode = 'fake' | 'gemini' | 'cartesia' | 'stream';
 const mode: TranslationMode = (import.meta.env.VITE_TRANSLATION as TranslationMode) || 'cartesia';
 
 export const offlineMode = mode === 'fake';
@@ -38,6 +40,8 @@ function createTranslationPort(): TranslationPort {
       return new LiveTranslateAdapter(tokenProvider);
     case 'cartesia':
       return new ComposedTranslationAdapter({ translate });
+    case 'stream':
+      return new StreamingTranslationAdapter();
   }
 }
 

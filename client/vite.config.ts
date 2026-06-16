@@ -6,7 +6,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': 'http://localhost:8787',
+      // ws:true so the dev server proxies the /api/stream WebSocket too.
+      '/api': { target: 'http://localhost:8787', ws: true },
     },
   },
   test: {
