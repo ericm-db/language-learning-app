@@ -25,12 +25,31 @@ echo 'VITE_TRANSLATION=fake' > client/.env.local
 npm run dev                      # client on :5173
 
 # live:
-cp server/.env.example server/.env   # fill in GEMINI_API_KEY
-npm run dev:server                   # token + coach service on :8787
+cp server/.env.example server/.env   # fill in GEMINI_API_KEY and CARTESIA_API_KEY
+npm run dev:server                   # token + coach + translate service on :8787
 npm run dev                          # client on :5173 (proxies /api -> :8787)
 ```
 
+`VITE_TRANSLATION` selects the translation path (client):
+
+- `cartesia` (default): composed STT->translate->TTS via `/api/translate`. Gemini
+  transcribes and translates; Cartesia synthesizes the speech. This is the path that
+  works for English->Telugu (see below). Turn-based; ~5-6 s per utterance.
+- `gemini`: direct Gemini live-translate, near-instant and continuous. Telugu->English
+  is good; English->Telugu returns no Telugu output (model limitation, see below).
+- `fake`: deterministic offline adapter, no key, no network.
+
 `npm run lint && npm run typecheck && npm test && npm run build` — what CI runs.
+
+## Why the composed (Cartesia) path exists
+
+The `gemini-3.5-live-translate-preview` model, verified against the live endpoint,
+fails the product's core direction: for English->Telugu it transcribes the English
+but returns an empty Telugu transcript and degraded audio (Telugu->English works
+fine). The composed pipeline routes around it — Gemini does STT+translation, Cartesia
+(strong at Telugu TTS) does the speech — behind the same `TranslationPort` and its
+contract suite (plan §1.1f). The provider keys stay server-side in `/api/translate`;
+the browser adapter is provider-neutral and does its own VAD endpointing.
 
 ## M0 gate status
 

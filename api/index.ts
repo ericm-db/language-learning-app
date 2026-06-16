@@ -12,7 +12,13 @@
 import { getRequestListener } from '@hono/node-server';
 import { createApp } from '../server/src/app.js';
 import { getGenAI } from '../server/src/lib/genai.js';
+import { getCartesia } from '../server/src/lib/cartesia.js';
 
-const app = createApp({ getTokenClient: getGenAI, getCoachClient: getGenAI });
+const app = createApp({
+  getTokenClient: getGenAI,
+  getCoachClient: getGenAI,
+  getTranslateModel: getGenAI,
+  getCartesiaClient: getCartesia,
+});
 
 export default getRequestListener(app.fetch);

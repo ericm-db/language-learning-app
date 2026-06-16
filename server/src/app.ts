@@ -9,10 +9,15 @@ import { createTokenRoute } from './routes/token.js';
 import type { TokenMintClient } from './routes/token.js';
 import { createCoachRoutes } from './routes/coach.js';
 import type { CoachModelClient } from './routes/coach.js';
+import { createTranslateRoute } from './routes/translate.js';
+import type { TranslateModelClient } from './routes/translate.js';
+import type { CartesiaClient } from './lib/cartesia.js';
 
 export interface AppDeps {
   getTokenClient: () => TokenMintClient;
   getCoachClient: () => CoachModelClient;
+  getTranslateModel: () => TranslateModelClient;
+  getCartesiaClient: () => CartesiaClient;
   tokenRateLimit?: RateLimitOptions;
 }
 
@@ -36,6 +41,10 @@ export function createApp(deps: AppDeps): Hono {
   app.use('/api/token', rateLimit(deps.tokenRateLimit));
   app.route('/api/token', createTokenRoute(deps.getTokenClient));
   app.route('/api/coach', createCoachRoutes(deps.getCoachClient));
+  app.route(
+    '/api/translate',
+    createTranslateRoute({ getModel: deps.getTranslateModel, getCartesia: deps.getCartesiaClient }),
+  );
 
   return app;
 }

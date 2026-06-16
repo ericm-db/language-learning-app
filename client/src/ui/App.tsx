@@ -1,5 +1,6 @@
 import { useState, type ReactElement } from 'react';
 import type { AudioPlaybackPort } from '../ports/AudioPlaybackPort';
+import type { CoordinatorState } from '../core/coordinator/types';
 import { useDrillStore } from '../store/drillStore';
 import { DebugPanel } from './DebugPanel';
 import { TranscriptPanes } from './TranscriptPanes';
@@ -8,6 +9,20 @@ export interface AppProps {
   /** Injected by the composition root; resume() must run inside a user gesture. */
   playback: AudioPlaybackPort;
 }
+
+// Plain-language status per coordinator state. The bare state label reads as
+// jargon and gives no hint that a multi-second translation lag is expected
+// rather than a hang.
+const STATUS_HINT: Record<CoordinatorState, string> = {
+  idle: 'Idle. Tap Arm to open a translation session.',
+  arming: 'Opening session...',
+  armed: 'Ready. Tap Start, then speak a full sentence.',
+  listening: 'Listening. Speak a sentence, then pause and wait a few seconds. Stop ends the whole session.',
+  translating: 'Translating. The model runs a few seconds behind you by design.',
+  reconnecting: 'Reconnecting...',
+  closing: 'Closing session...',
+  error: 'Error. See the message below.',
+};
 
 export function App({ playback }: AppProps): ReactElement {
   const coordinatorState = useDrillStore((s) => s.coordinatorState);
@@ -18,6 +33,12 @@ export function App({ playback }: AppProps): ReactElement {
   const stopListening = useDrillStore((s) => s.stopListening);
   const toggleDirection = useDrillStore((s) => s.toggleDirection);
   const reportError = useDrillStore((s) => s.reportError);
+  // Most recent first-audio sample: a real, on-screen "how long did that take"
+  // so a normal multi-second lag reads as working, not hung.
+  const lastFirstAudioMs = useDrillStore((s) => {
+    const samples = s.metrics.t_first_audio.samples;
+    return samples.length > 0 ? samples[samples.length - 1] ?? null : null;
+  });
   const [debugOpen, setDebugOpen] = useState(false);
 
   const offline = import.meta.env.VITE_TRANSLATION === 'fake';
@@ -68,6 +89,17 @@ export function App({ playback }: AppProps): ReactElement {
           {debugOpen ? 'Hide debug' : 'Show debug'}
         </button>
       </section>
+
+      <p className="status-hint" aria-live="polite">
+        {STATUS_HINT[coordinatorState]}
+        {lastFirstAudioMs !== null ? (
+          <span className="latency-readout">
+            {' '}
+            Last translation arrived {(lastFirstAudioMs / 1000).toFixed(1)}s after you started
+            speaking.
+          </span>
+        ) : null}
+      </p>
 
       {lastError !== null ? (
         <p className="error-line" role="alert">

@@ -109,6 +109,18 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.status-hint {
+  margin: 0.5rem 0 0;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--fg);
+}
+
+.latency-readout {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* The dot is decorative; the text label is the accessible signal. */
 .dot {
   width: 0.625rem;

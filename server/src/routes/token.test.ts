@@ -104,6 +104,12 @@ describe('POST /api/token', () => {
       getCoachClient: () => {
         throw new Error('not used');
       },
+      getTranslateModel: () => {
+        throw new Error('not used');
+      },
+      getCartesiaClient: () => {
+        throw new Error('not used');
+      },
     });
 
     const res = await app.request('/api/token', {
