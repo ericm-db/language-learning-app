@@ -1,0 +1,22 @@
+# Fly.io config. Rename `app` to your chosen name before first deploy.
+app = "telugu-practice"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  # Must match the Dockerfile EXPOSE and the port the app listens on.
+  # Fly sets PORT to internal_port by default; the app reads process.env.PORT.
+  internal_port = 8080
+  force_https = true
+  # Always-on single machine: keep it warm to hold the persistent WebSocket
+  # connections to the STT/TTS providers (do not auto-stop).
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  # WebSockets ride the same http_service; Fly upgrades automatically, no extra config.
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

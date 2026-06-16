@@ -1,0 +1,35 @@
+# Keep the build context to server inputs + root lockfile/manifests.
+# NOTE: package.json and package-lock.json are NOT ignored (needed by npm ci).
+
+# Installed/built artifacts (reinstalled/rebuilt in the image).
+node_modules
+**/node_modules
+client/dist
+server/dist
+
+# The client SPA is not part of the server deployable.
+client
+
+# Vercel serverless entry (this image is the standalone node server).
+api
+vercel.json
+
+# Secrets and local env (NODE_ENV=production uses Fly secrets, never a .env file).
+**/*.env
+.env
+.env.*
+
+# Repo cruft not needed in the image.
+.git
+.github
+.gitignore
+.claude
+docs
+*.log
+Dockerfile
+.dockerignore
+fly.toml
+
+# Tests and lint config.
+**/*.test.ts
+**/eslint.config.js

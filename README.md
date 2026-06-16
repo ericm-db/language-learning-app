@@ -93,6 +93,28 @@ before exposing it more widely. The standalone node server
 (`npm run dev:server` / `server/dist`) remains the path for Cloud Run-style
 long-lived deploys.
 
+## Deploy (Fly.io)
+
+Fly hosts the standalone node server (`server/dist`) as a single always-on
+machine. This replaces the Vercel serverless deploy for the API/streaming
+server: Vercel can't host WebSockets, and this app holds warm WebSocket
+connections to the STT/TTS providers. The static client can still be hosted
+separately (or served by this server later).
+
+```sh
+fly launch         # first time: creates the app from fly.toml + Dockerfile
+fly deploy         # subsequent deploys
+
+fly secrets set \
+  GEMINI_API_KEY=... \
+  CARTESIA_API_KEY=... \
+  SARVAM_API_KEY=... \
+  ALLOWED_ORIGIN=https://<app>.fly.dev
+```
+
+`min_machines_running = 1` keeps the machine warm for low latency and to hold
+the persistent provider connections (no cold starts, no dropped sockets).
+
 ## Notes
 
 - `docs/api-notes.md` records two places the live SDK (@google/genai 2.7.0 .d.ts)
