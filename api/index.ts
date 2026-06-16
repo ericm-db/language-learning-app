@@ -2,11 +2,17 @@
 // transparent, so Hono still sees the original path (/api/token, /api/coach/*).
 // Note the in-memory rate limiter is per-instance on serverless — acceptable
 // for a single-user tool, swap for a shared store before multi-user use.
+//
+// This function runs on Vercel's Node.js runtime (the @google/genai SDK needs
+// Node APIs). hono/vercel's `handle` is for the Edge runtime only — under Node
+// it never writes to the response object, so the request hangs to a 504.
+// getRequestListener bridges Hono's fetch handler to the Node (req, res)
+// signature Vercel's Node runtime invokes, which is what actually replies.
 
-import { handle } from 'hono/vercel';
+import { getRequestListener } from '@hono/node-server';
 import { createApp } from '../server/src/app.js';
 import { getGenAI } from '../server/src/lib/genai.js';
 
 const app = createApp({ getTokenClient: getGenAI, getCoachClient: getGenAI });
 
-export default handle(app);
+export default getRequestListener(app.fetch);
