@@ -44,6 +44,10 @@ interface RelayMessage {
   base64?: string;
   sampleRate?: number;
   message?: string;
+  sttMs?: number;
+  translateMs?: number;
+  ttsMs?: number;
+  totalMs?: number;
 }
 
 function oppositeOf(target: LanguageTag): LanguageTag {
@@ -195,6 +199,14 @@ export class StreamingTranslationAdapter implements TranslationPort {
         sampleRate: msg.sampleRate ?? OUTPUT_RATE,
         channels: 1,
       });
+    } else if (msg.type === 'timing') {
+      // Server-measured post-speech latency: the meaningful number for streaming
+      // (the coordinator's t_* metrics are anchored at speech start, not useful
+      // here). Surface via the same srv_* metric rows the composed path uses.
+      if (typeof msg.sttMs === 'number') this.emitter.emit('timing', { stage: 'srv_stt', ms: msg.sttMs });
+      if (typeof msg.translateMs === 'number') this.emitter.emit('timing', { stage: 'srv_translate', ms: msg.translateMs });
+      if (typeof msg.ttsMs === 'number') this.emitter.emit('timing', { stage: 'srv_tts', ms: msg.ttsMs });
+      if (typeof msg.totalMs === 'number') this.emitter.emit('timing', { stage: 'round_trip', ms: msg.totalMs });
     } else if (msg.type === 'turnComplete') {
       this.emitter.emit('turnComplete', undefined);
     } else if (msg.type === 'error') {

@@ -21,6 +21,7 @@ export interface StreamSessionDeps {
 export type OutboundMessage =
   | { type: 'transcript'; side: 'input' | 'output'; text: string; final: true }
   | { type: 'audio'; base64: string; sampleRate: number }
+  | { type: 'timing'; sttMs: number; translateMs: number; ttsMs: number; totalMs: number }
   | { type: 'turnComplete' }
   | { type: 'error'; message: string };
 
@@ -33,7 +34,10 @@ const OUTPUT_RATE = 24000;
 const ENERGY_THRESHOLD = 0.012;
 const SILENCE_MS = 500;
 const MIN_SPEECH_MS = 250;
-const PRE_ROLL_MS = 120;
+// Generous pre-roll: soft word onsets ("Where...") fall below the energy
+// threshold, so keep enough leading audio to recover them when speech is
+// confirmed, or the STT clips the first word or two.
+const PRE_ROLL_MS = 500;
 
 function rmsEnergy(frame: Buffer): number {
   const n = Math.floor(frame.length / 2);
@@ -75,18 +79,27 @@ export function createStreamSession(
   }
 
   async function finalizeTurn(stream: SttStream): Promise<void> {
+    // All timing is post-speech (the user has paused); this is the real
+    // perceived latency, unlike the client's speech-start-anchored metrics.
+    const t0 = Date.now();
     try {
       const sourceText = (await stream.finalize()).trim();
+      const sttMs = Date.now() - t0;
       if (closed || sourceText.length === 0) return; // no intelligible speech
       send({ type: 'transcript', side: 'input', text: sourceText, final: true });
 
+      const tTranslate = Date.now();
       const targetText = (await deps.translate(sourceText, sourceLang, targetLang)).trim();
+      const translateMs = Date.now() - tTranslate;
       if (closed || targetText.length === 0) return;
       send({ type: 'transcript', side: 'output', text: targetText, final: true });
 
+      const tTts = Date.now();
       const audio = await deps.tts(targetText, targetLang, OUTPUT_RATE);
+      const ttsMs = Date.now() - tTts;
       if (closed) return;
       send({ type: 'audio', base64: audio.toString('base64'), sampleRate: OUTPUT_RATE });
+      send({ type: 'timing', sttMs, translateMs, ttsMs, totalMs: Date.now() - t0 });
       send({ type: 'turnComplete' });
     } catch (err) {
       if (!closed) send({ type: 'error', message: err instanceof Error ? err.message : 'stream turn failed' });

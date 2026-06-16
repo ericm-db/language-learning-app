@@ -36,7 +36,23 @@ export function openCartesiaSttStream(
   });
   const ws = new WebSocket(`wss://api.cartesia.ai/stt/websocket?${params.toString()}`);
   const parts: string[] = [];
-  const ready = waitOpen(ws);
+  // Frames pushed before the socket finishes opening (the utterance onset +
+  // pre-roll) must be buffered, not dropped, or the first word is lost.
+  const pending: Buffer[] = [];
+  let isOpen = false;
+  const ready = new Promise<void>((resolve) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      isOpen = true;
+      resolve();
+      return;
+    }
+    ws.onopen = (): void => {
+      isOpen = true;
+      for (const f of pending) ws.send(f);
+      pending.length = 0;
+      resolve();
+    };
+  });
 
   ws.onmessage = (event: MessageEvent): void => {
     const msg = parseJson(event.data);
@@ -45,7 +61,8 @@ export function openCartesiaSttStream(
 
   return {
     push: (frame) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(frame);
+      if (isOpen) ws.send(frame);
+      else pending.push(frame);
     },
     finalize: async () => {
       await ready;
@@ -106,13 +123,6 @@ export function openBatchSttStream(batchStt: (pcm: Buffer) => Promise<string>): 
       frames.length = 0;
     },
   };
-}
-
-function waitOpen(ws: WebSocket): Promise<void> {
-  return new Promise((resolve) => {
-    if (ws.readyState === WebSocket.OPEN) return resolve();
-    ws.onopen = (): void => resolve();
-  });
 }
 
 function parseJson(data: unknown): { type?: string; text?: unknown; transcript?: unknown; data?: { transcript?: unknown } } | null {

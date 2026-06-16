@@ -48,10 +48,11 @@ describe('createStreamSession', () => {
     await feed(session, 6, 6); // 600ms speech, 600ms silence -> endpoint
     await vi.waitFor(() => expect(messages.some((m) => m.type === 'turnComplete')).toBe(true));
 
-    expect(messages.map((m) => m.type)).toEqual(['transcript', 'transcript', 'audio', 'turnComplete']);
+    expect(messages.map((m) => m.type)).toEqual(['transcript', 'transcript', 'audio', 'timing', 'turnComplete']);
     expect(messages[0]).toMatchObject({ type: 'transcript', side: 'input', text: 'where is the station' });
     expect(messages[1]).toMatchObject({ type: 'transcript', side: 'output', text: 'స్టేషన్ ఎక్కడ?' });
     expect(messages[2]).toMatchObject({ type: 'audio', sampleRate: 24000 });
+    expect(messages[3]).toMatchObject({ type: 'timing', sttMs: expect.any(Number), totalMs: expect.any(Number) });
   });
 
   it('discards a sub-minimum-speech blip without a turn', async () => {
