@@ -8,6 +8,9 @@ primary_region = "sjc"
 [env]
   # Progress SQLite DB lives on the mounted volume so it survives deploys.
   DATA_DIR = "/data"
+  # The app reads process.env.PORT; Fly does NOT auto-set it for Dockerfile
+  # apps, so pin it to the internal_port the proxy routes to.
+  PORT = "8080"
 
 [mounts]
   # Create once: fly volumes create telugu_data --size 1
@@ -15,8 +18,7 @@ primary_region = "sjc"
   destination = "/data"
 
 [http_service]
-  # Must match the Dockerfile EXPOSE and the port the app listens on.
-  # Fly sets PORT to internal_port by default; the app reads process.env.PORT.
+  # Must match the Dockerfile EXPOSE and PORT (set in [env]); the app listens here.
   internal_port = 8080
   force_https = true
   # Always-on single machine: keep it warm to hold the persistent WebSocket
