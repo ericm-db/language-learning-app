@@ -47,6 +47,18 @@ const TURN_SCHEMA: Schema = {
     },
     feedback: { type: Type.STRING, description: 'Optional one-line friendly note on the learner last reply; empty if none' },
     learnerScore: { type: Type.INTEGER, description: 'Quality 0-100 of the learner last reply (intelligibility + appropriateness); 0 if there is no learner turn yet' },
+    newVocab: {
+      type: Type.ARRAY,
+      description: 'The 1-2 NEW words/verbs/expressions you introduced in THIS tutor utterance that the learner likely does not know yet (for spaced review). Empty if none new.',
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          telugu: { type: Type.STRING, description: 'The new word or short expression, Telugu script' },
+          gloss: { type: Type.STRING, description: 'Its English meaning' },
+        },
+        required: ['telugu', 'gloss'],
+      },
+    },
   },
   required: ['tutorTelugu', 'tutorGloss', 'candidates'],
 };
@@ -70,16 +82,25 @@ function parseHistory(value: unknown): TurnMsg[] | null {
   return out;
 }
 
-function prompt(history: TurnMsg[]): string {
+function prompt(history: TurnMsg[], knownVocab: string[]): string {
   const transcript = history.length === 0
     ? '(no messages yet — start the conversation)'
     : history.map((m) => `${m.role === 'tutor' ? 'Tutor' : 'Learner'}: ${m.text}`).join('\n');
+  const known = knownVocab.length === 0 ? 'nothing yet' : knownVocab.join(', ');
   return [
     'You are a warm, patient Telugu conversation partner for an English-speaking NEAR-BEGINNER.',
     'Goal: natural everyday spoken conversation. Keep YOUR Telugu SHORT (one short sentence),',
     'COLLOQUIAL and spoken-register (Telugu is diglossic; never formal/written Telugu), in Telugu script.',
     'Be responsive and varied — this is a real, unscripted conversation, not a fixed scenario.',
     'Ask simple questions and react to what the learner says so they can keep talking.',
+    '',
+    'TEACH PROGRESSIVELY — this is the most important instruction. Each turn, naturally introduce',
+    '1-2 NEW useful words or verbs the learner likely does not know yet, used inside your short',
+    'utterance, just slightly beyond their level (comprehensible). Do NOT keep rehashing greetings or',
+    '"how are you" — move the topic forward (food, family, work, going places, plans...) and expand',
+    'their vocabulary. List those new words in newVocab, each with its English meaning; only leave',
+    'newVocab empty if you genuinely introduced nothing new.',
+    `The learner ALREADY KNOWS these, so build BEYOND them rather than repeating: ${known}.`,
     '',
     'Also propose 2-3 things the LEARNER could naturally say next (colloquial spoken Telugu, varied,',
     'short), each as a candidate reply with its English meaning — these help a stuck beginner respond.',
@@ -91,6 +112,11 @@ function prompt(history: TurnMsg[]): string {
     'Conversation so far:',
     transcript,
   ].join('\n');
+}
+
+function parseKnownVocab(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).slice(0, 60).map((v) => v.slice(0, 120));
 }
 
 function parseModelJson(text: string | undefined): unknown {
@@ -116,6 +142,7 @@ export function createTutorRoute(deps: TutorRouteDeps): Hono {
     if (!isRecord(body)) return c.json({ error: 'Body must be a JSON object' }, 400);
     const history = parseHistory(body.history ?? []);
     if (history === null) return c.json({ error: 'history must be an array of {role,text}' }, 400);
+    const knownVocab = parseKnownVocab(body.knownVocab);
 
     let model: TutorModelClient;
     let cartesia: CartesiaClient;
@@ -131,10 +158,11 @@ export function createTutorRoute(deps: TutorRouteDeps): Hono {
     let candidates: Array<{ telugu: string; gloss: string }>;
     let feedback: string | undefined;
     let learnerScore: number | undefined;
+    let newVocab: Array<{ telugu: string; gloss: string }> = [];
     try {
       const response = await model.models.generateContent({
         model: TUTOR_MODEL,
-        contents: prompt(history),
+        contents: prompt(history, knownVocab),
         config: { responseMimeType: 'application/json', responseSchema: TURN_SCHEMA },
       });
       const parsed = parseModelJson(response.text);
@@ -153,6 +181,13 @@ export function createTutorRoute(deps: TutorRouteDeps): Hono {
       if (typeof parsed.learnerScore === 'number' && Number.isFinite(parsed.learnerScore)) {
         learnerScore = Math.max(0, Math.min(100, Math.round(parsed.learnerScore)));
       }
+      if (Array.isArray(parsed.newVocab)) {
+        newVocab = parsed.newVocab
+          .filter((x): x is { telugu: string; gloss: string } =>
+            isRecord(x) && typeof x.telugu === 'string' && x.telugu.trim().length > 0 && typeof x.gloss === 'string')
+          .slice(0, 4)
+          .map((x) => ({ telugu: x.telugu.trim(), gloss: x.gloss.trim() }));
+      }
     } catch {
       return c.json(upstreamError, 502);
     }
@@ -170,6 +205,7 @@ export function createTutorRoute(deps: TutorRouteDeps): Hono {
     return c.json({
       tutor: { telugu: tutorTelugu, gloss: tutorGloss, audioBase64, outputSampleRate: OUTPUT_SAMPLE_RATE },
       candidates,
+      newVocab,
       ...(feedback === undefined ? {} : { feedback }),
       ...(lastWasLearner && learnerScore !== undefined ? { learnerScore } : {}),
     });

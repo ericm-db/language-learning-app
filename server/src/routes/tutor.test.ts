@@ -29,6 +29,7 @@ const goodTurn = JSON.stringify({
     { telugu: 'నేను బాగున్నాను', gloss: 'I am fine' },
     { telugu: 'పర్వాలేదు', gloss: 'Not bad' },
   ],
+  newVocab: [{ telugu: 'రేపు', gloss: 'tomorrow' }],
   feedback: '',
 });
 
@@ -46,6 +47,13 @@ describe('POST /api/tutor/turn', () => {
     const m = stubModel(goodTurn);
     await post(app(m, cartesia(Buffer.from([0]))), { history: [{ role: 'tutor', text: 'హాయ్' }, { role: 'learner', text: 'నేను' }] });
     expect(m.calls[0]?.contents as string).toContain('Learner: నేను');
+  });
+
+  it('returns introduced newVocab and feeds knownVocab into the prompt', async () => {
+    const m = stubModel(goodTurn);
+    const res = await post(app(m, cartesia(Buffer.from([0]))), { history: [], knownVocab: ['నమస్కారం', 'బాగున్నాను'] });
+    expect((await res.json()) as { newVocab: unknown }).toMatchObject({ newVocab: [{ telugu: 'రేపు', gloss: 'tomorrow' }] });
+    expect(m.calls[0]?.contents as string).toContain('నమస్కారం');
   });
 
   it('includes feedback when the model returns it', async () => {
