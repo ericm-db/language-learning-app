@@ -15,6 +15,7 @@ import type { CartesiaClient } from './lib/cartesia.js';
 import type { SarvamSttClient } from './lib/sarvam.js';
 import { createProgressRoutes } from './routes/progress.js';
 import type { ProgressRepo } from './lib/progressRepo.js';
+import { createTranscribeRoute } from './routes/transcribe.js';
 
 export interface AppDeps {
   getTokenClient: () => TokenMintClient;
@@ -56,6 +57,10 @@ export function createApp(deps: AppDeps): Hono {
     }),
   );
   app.route('/api/progress', createProgressRoutes({ getRepo: deps.getProgressRepo }));
+  app.route(
+    '/api/transcribe',
+    createTranscribeRoute({ getCartesia: deps.getCartesiaClient, getSarvam: deps.getSarvamClient }),
+  );
 
   return app;
 }
