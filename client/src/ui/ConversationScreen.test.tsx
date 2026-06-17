@@ -58,7 +58,7 @@ function render(state: Partial<ConversationStoreState>): void {
 
 describe('ConversationScreen', () => {
   it('renders the tutor utterance with romanization and gloss', () => {
-    render({ status: 'awaiting', turns: [tutorExchange], candidates, rung: 0 });
+    render({ status: 'listening', turns: [tutorExchange], candidates, rung: 0 });
     const text = container.textContent ?? '';
     expect(text).toContain('మీరు ఎలా ఉన్నారు?');
     expect(text).toContain('mīru elā unnāru?');
@@ -66,7 +66,7 @@ describe('ConversationScreen', () => {
   });
 
   it('rung 0: candidates show romanization, gloss, and Telugu script; full support', () => {
-    render({ status: 'awaiting', turns: [tutorExchange], candidates, rung: 0 });
+    render({ status: 'listening', turns: [tutorExchange], candidates, rung: 0 });
     const text = container.textContent ?? '';
     expect(text).toContain('support: full');
     expect(text).toContain('nēnu bāgunnānu'); // romanization
@@ -75,7 +75,7 @@ describe('ConversationScreen', () => {
   });
 
   it('rung 1: candidates show romanization only — no gloss, no script', () => {
-    render({ status: 'awaiting', turns: [tutorExchange], candidates, rung: 1 });
+    render({ status: 'listening', turns: [tutorExchange], candidates, rung: 1 });
     const text = container.textContent ?? '';
     expect(text).toContain('support: less');
     expect(text).toContain('nēnu bāgunnānu'); // romanization present
@@ -84,7 +84,7 @@ describe('ConversationScreen', () => {
   });
 
   it('rung 2: only a first-word hint of one candidate', () => {
-    render({ status: 'awaiting', turns: [tutorExchange], candidates, rung: 2 });
+    render({ status: 'listening', turns: [tutorExchange], candidates, rung: 2 });
     const text = container.textContent ?? '';
     expect(text).toContain('support: hint');
     expect(text).toContain('hint:');
@@ -94,7 +94,7 @@ describe('ConversationScreen', () => {
   });
 
   it('rung 3: no candidates, a quiet free-production note, support none', () => {
-    render({ status: 'awaiting', turns: [tutorExchange], candidates, rung: 3 });
+    render({ status: 'listening', turns: [tutorExchange], candidates, rung: 3 });
     const text = container.textContent ?? '';
     expect(text).toContain('support: none');
     expect(text).toContain('Try replying on your own');
@@ -104,12 +104,32 @@ describe('ConversationScreen', () => {
 
   it('shows a thinking state while the next turn generates', () => {
     render({ status: 'thinking', turns: [tutorExchange], candidates, rung: 0 });
-    expect(container.textContent ?? '').toContain('thinking...');
+    expect(container.textContent ?? '').toContain('Thinking...');
+  });
+
+  it('hands-free: tutorSpeaking shows the speaking state and no scaffold or buttons', () => {
+    render({ status: 'tutorSpeaking', turns: [tutorExchange], candidates, rung: 0 });
+    const text = container.textContent ?? '';
+    expect(text).toContain('Tutor is speaking...');
+    // No scaffold while the tutor speaks; no manual record/done control either.
+    expect(text).not.toContain('nēnu bāgunnānu');
+    expect(text).not.toContain('Done speaking');
+  });
+
+  it('hands-free: listening shows the turn prompt and a "Done speaking" fallback, never Record/Stop', () => {
+    render({ status: 'listening', turns: [tutorExchange], candidates, rung: 0 });
+    const text = container.textContent ?? '';
+    expect(text).toContain('Your turn — just speak');
+    // The only manual control is the fallback; the old Record/Stop are gone.
+    const labels = Array.from(container.querySelectorAll('button')).map((b) => b.textContent);
+    expect(labels).toContain('Done speaking');
+    expect(labels).not.toContain('Record');
+    expect(labels).not.toContain('Stop');
   });
 
   it('shows the learner reply and feedback in the transcript', () => {
     render({
-      status: 'awaiting',
+      status: 'listening',
       turns: [{ ...tutorExchange, learnerReply: 'నేను బాగున్నాను', feedback: 'Clear reply.' }],
       candidates,
       rung: 0,

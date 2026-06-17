@@ -19,8 +19,8 @@ import type {
   TranslationCapabilities,
   Unsubscribe,
 } from '../../ports/types';
-import type { EndpointerConfig } from './vad';
-import { createEndpointer, type Endpointer } from './vad';
+import type { EndpointerConfig } from '../../core/vad';
+import { createEndpointer, type Endpointer } from '../../core/vad';
 import type { TranslateFn, TranslateTimings } from './types';
 
 const INPUT_RATE = 16000;

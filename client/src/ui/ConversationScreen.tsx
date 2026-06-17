@@ -63,8 +63,8 @@ export function ConversationScreen(): ReactElement {
   const rung = useConversationStore((s) => s.rung);
   const lastFeedback = useConversationStore((s) => s.lastFeedback);
   const error = useConversationStore((s) => s.error);
-  const startRecording = useConversationStore((s) => s.startRecording);
-  const stopAndSend = useConversationStore((s) => s.stopAndSend);
+  const sendNow = useConversationStore((s) => s.sendNow);
+  const reset = useConversationStore((s) => s.reset);
 
   if (status === 'error') {
     return (
@@ -86,9 +86,9 @@ export function ConversationScreen(): ReactElement {
     );
   }
 
-  const recording = status === 'recording';
+  const tutorSpeaking = status === 'tutorSpeaking';
+  const listening = status === 'listening';
   const thinking = status === 'thinking';
-  const awaiting = status === 'awaiting';
 
   return (
     <section className="conversation" aria-label="Conversation">
@@ -111,38 +111,40 @@ export function ConversationScreen(): ReactElement {
         ))}
       </div>
 
-      {thinking ? (
-        <p className="status-hint" aria-live="polite">
-          thinking...
-        </p>
-      ) : null}
+      <p className="conv-state" aria-live="polite">
+        {tutorSpeaking ? 'Tutor is speaking...' : null}
+        {listening ? 'Your turn — just speak' : null}
+        {thinking ? 'Thinking...' : null}
+      </p>
 
-      {awaiting || recording ? (
+      {/* Scaffold shows only while it is the learner's turn to speak. */}
+      {listening ? (
         <div className="conv-reply">
           <p className="conv-support" aria-label="Support level">
             {supportLabel(rung)}
           </p>
-          {!recording ? <Scaffold rung={rung} candidates={candidates} /> : null}
+          <Scaffold rung={rung} candidates={candidates} />
 
+          {/* Manual fallback: force-submit when the VAD misses the pause. */}
           <div className="review-controls">
-            {recording ? (
-              <button type="button" onClick={() => void stopAndSend()}>
-                Stop
-              </button>
-            ) : (
-              <button type="button" onClick={() => void startRecording()}>
-                Record
-              </button>
-            )}
+            <button type="button" className="conv-done" onClick={() => void sendNow()}>
+              Done speaking
+            </button>
           </div>
         </div>
       ) : null}
 
-      {lastFeedback && !awaiting && !recording ? (
+      {lastFeedback && !listening ? (
         <p className="conv-feedback" aria-live="polite">
           {lastFeedback}
         </p>
       ) : null}
+
+      <div className="review-controls conv-session-controls">
+        <button type="button" className="conv-end" onClick={() => void reset()}>
+          End
+        </button>
+      </div>
     </section>
   );
 }

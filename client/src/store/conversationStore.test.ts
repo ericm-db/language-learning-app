@@ -12,9 +12,33 @@ import {
   type TutorTurn,
 } from './conversationStore';
 
+// VAD-shaped frames at 16k: ~100ms chunks (1600 samples). Speech is well above
+// the 0.012 energy threshold; silence is zeros. The default endpointer needs
+// >=300ms speech then >=700ms trailing silence to fire an utterance, so 4 speech
+// + 8 silence chunks comfortably trips it.
+const FRAME = 1600;
+function speechFrame(): Int16Array {
+  return new Int16Array(FRAME).fill(Math.round(0.2 * 32768));
+}
+function silenceFrame(): Int16Array {
+  return new Int16Array(FRAME);
+}
+function speechThenSilence(): Int16Array[] {
+  const out: Int16Array[] = [];
+  for (let i = 0; i < 4; i += 1) out.push(speechFrame());
+  for (let i = 0; i < 8; i += 1) out.push(silenceFrame());
+  return out;
+}
+
 // Capture fake: start() returns an async iterable that yields the queued chunks
-// then ends once stop() is called (mirrors WorkletCapture's queue.close()).
-function fakeCapture(chunks: Int16Array[]): { port: AudioCapturePort; stop: ReturnType<typeof vi.fn> } {
+// (one per microtask so the drain loop can endpoint mid-stream) then blocks until
+// stop() is called, mirroring WorkletCapture's queue.close(). startCount lets a
+// test assert the mic was (not) opened.
+function fakeCapture(chunks: Int16Array[]): {
+  port: AudioCapturePort;
+  start: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
+} {
   let resolveDone!: () => void;
   const done = new Promise<void>((resolve) => {
     resolveDone = resolve;
@@ -22,26 +46,45 @@ function fakeCapture(chunks: Int16Array[]): { port: AudioCapturePort; stop: Retu
   const stop = vi.fn(async () => {
     resolveDone();
   });
-  const port: AudioCapturePort = {
-    start: async () =>
-      (async function* (): AsyncIterable<PcmChunk> {
-        for (const data of chunks) yield { data, sampleRate: 16000, channels: 1 };
-        await done;
-      })(),
-    stop,
-  };
-  return { port, stop };
+  const start = vi.fn(async () =>
+    (async function* (): AsyncIterable<PcmChunk> {
+      for (const data of chunks) yield { data, sampleRate: 16000, channels: 1 };
+      await done;
+    })(),
+  );
+  const port: AudioCapturePort = { start, stop };
+  return { port, start, stop };
 }
 
-function fakePlayback(): AudioPlaybackPort & { enqueue: ReturnType<typeof vi.fn>; resume: ReturnType<typeof vi.fn> } {
+// Playback fake whose onDrained handler is captured so a test can fire it to
+// simulate the tutor audio finishing (the echo guard's mic-open trigger).
+function fakePlayback(): AudioPlaybackPort & {
+  enqueue: ReturnType<typeof vi.fn>;
+  resume: ReturnType<typeof vi.fn>;
+  flush: ReturnType<typeof vi.fn>;
+  fireDrained: () => void;
+} {
+  const handlers = new Set<() => void>();
   const enqueue = vi.fn();
   const resume = vi.fn(async () => undefined);
+  const flush = vi.fn();
   return {
     enqueue,
     resume,
-    flush: vi.fn(),
-    onDrained: vi.fn(() => () => undefined),
-  } as unknown as AudioPlaybackPort & { enqueue: ReturnType<typeof vi.fn>; resume: ReturnType<typeof vi.fn> };
+    flush,
+    onDrained: vi.fn((h: () => void) => {
+      handlers.add(h);
+      return () => handlers.delete(h);
+    }),
+    fireDrained: () => {
+      for (const h of [...handlers]) h();
+    },
+  } as unknown as AudioPlaybackPort & {
+    enqueue: ReturnType<typeof vi.fn>;
+    resume: ReturnType<typeof vi.fn>;
+    flush: ReturnType<typeof vi.fn>;
+    fireDrained: () => void;
+  };
 }
 
 function fakeProgress(opts: {
@@ -84,7 +127,10 @@ interface Bound {
   transcribe: ReturnType<typeof vi.fn>;
   enqueue: ReturnType<typeof vi.fn>;
   resume: ReturnType<typeof vi.fn>;
-  capture: AudioCapturePort;
+  flush: ReturnType<typeof vi.fn>;
+  fireDrained: () => void;
+  captureStart: ReturnType<typeof vi.fn>;
+  captureStop: ReturnType<typeof vi.fn>;
 }
 
 function bind(overrides: {
@@ -94,6 +140,7 @@ function bind(overrides: {
   transcribeReject?: Error;
   rung?: number;
   scaffoldRung?: number | null;
+  captureChunks?: Int16Array[];
 }): Bound {
   const turns = overrides.tutorTurns ?? [turn(), turn()];
   let i = 0;
@@ -109,7 +156,7 @@ function bind(overrides: {
   });
   const progress = fakeProgress({ rung: overrides.rung ?? 0, scaffoldRung: overrides.scaffoldRung ?? null });
   const playback = fakePlayback();
-  const cap = fakeCapture([new Int16Array([5, 6, 7])]);
+  const cap = fakeCapture(overrides.captureChunks ?? speechThenSilence());
   const deps: ConversationDeps = {
     tutor: tutor as unknown as TutorFn,
     progress,
@@ -125,8 +172,16 @@ function bind(overrides: {
     transcribe,
     enqueue: playback.enqueue,
     resume: playback.resume,
-    capture: cap.port,
+    flush: playback.flush,
+    fireDrained: playback.fireDrained,
+    captureStart: cap.start,
+    captureStop: cap.stop,
   };
+}
+
+// Let pending microtasks (the detached drain loop, awaited promises) settle.
+async function flushAsync(): Promise<void> {
+  for (let i = 0; i < 20; i += 1) await Promise.resolve();
 }
 
 beforeEach(() => {
@@ -141,13 +196,13 @@ beforeEach(() => {
   });
 });
 
-describe('conversationStore', () => {
-  it('start() seeds the rung, shows the first tutor turn + candidates, and plays audio', async () => {
+describe('conversationStore (hands-free)', () => {
+  it('start() seeds the rung, shows the first tutor turn + candidates, plays audio, and enters tutorSpeaking', async () => {
     const b = bind({ rung: 1 });
     await useConversationStore.getState().start();
 
     const s = useConversationStore.getState();
-    expect(s.status).toBe('awaiting');
+    expect(s.status).toBe('tutorSpeaking');
     expect(s.rung).toBe(1);
     expect(b.conversationRung).toHaveBeenCalledTimes(1);
     expect(b.tutor).toHaveBeenCalledWith([]);
@@ -170,7 +225,37 @@ describe('conversationStore', () => {
     expect(chunk.data.length).toBeGreaterThan(0);
   });
 
-  it('startRecording -> stopAndSend transcribes, detects usedCandidate, records the attempt, advances rung, appends the next turn', async () => {
+  it('ECHO GUARD: after a tutor turn the mic does NOT open until playback drains', async () => {
+    const b = bind({ rung: 0 });
+    await useConversationStore.getState().start();
+
+    // Tutor audio is still playing: capture must not have started.
+    expect(useConversationStore.getState().status).toBe('tutorSpeaking');
+    expect(b.captureStart).not.toHaveBeenCalled();
+
+    // Audio finishes -> onDrained fires -> mic opens, status flips to listening.
+    b.fireDrained();
+    await flushAsync();
+    expect(b.captureStart).toHaveBeenCalledTimes(1);
+    expect(b.captureStart.mock.calls[0]?.[0]).toBe(16000);
+    expect(useConversationStore.getState().status).toBe('listening');
+  });
+
+  it('opens the mic immediately when the tutor turn has no audio', async () => {
+    // Speech-only frames so the VAD does not auto-submit; the mic stays open.
+    const b = bind({
+      tutorTurns: [turn({ tutor: { telugu: 'హాయ్', gloss: 'Hi', audioBase64: '', outputSampleRate: 24000 } }), turn()],
+      captureChunks: [speechFrame(), speechFrame()],
+    });
+    await useConversationStore.getState().start();
+    await flushAsync();
+    // No audio -> no enqueue, mic opened without waiting for a drain event.
+    expect(b.enqueue).not.toHaveBeenCalled();
+    expect(b.captureStart).toHaveBeenCalledTimes(1);
+    expect(useConversationStore.getState().status).toBe('listening');
+  });
+
+  it('VAD auto-submit: speech-then-silence transcribes, records the attempt, advances rung, appends the next turn — no manual call', async () => {
     const next = turn({
       tutor: { telugu: 'బాగుంది', gloss: 'Good', audioBase64: '', outputSampleRate: 24000 },
       candidates: [{ telugu: 'అవును', gloss: 'Yes' }],
@@ -181,12 +266,16 @@ describe('conversationStore', () => {
     const b = bind({ tutorTurns: [turn(), next], transcript: 'నేను బాగున్నాను', rung: 0, scaffoldRung: 1 });
 
     await useConversationStore.getState().start();
-    await useConversationStore.getState().startRecording();
-    expect(useConversationStore.getState().status).toBe('recording');
+    // Open the mic (echo guard).
+    b.fireDrained();
+    await flushAsync();
+    expect(useConversationStore.getState().status).toBe('listening');
 
-    await useConversationStore.getState().stopAndSend();
+    // The endpointer fires on the queued speech-then-silence frames and submits
+    // on its own; settle the detached drain + submit pipeline.
+    await flushAsync();
 
-    // Transcribed Telugu at 16k.
+    // Transcribed Telugu at 16k — without any stopAndSend/sendNow call.
     expect(b.transcribe).toHaveBeenCalledTimes(1);
     expect(b.transcribe.mock.calls[0]?.[0]).toBe('te');
     expect(b.transcribe.mock.calls[0]?.[2]).toBe(16000);
@@ -208,7 +297,8 @@ describe('conversationStore', () => {
     // Rung advanced from the response; next tutor turn appended; feedback set.
     const s = useConversationStore.getState();
     expect(s.rung).toBe(1);
-    expect(s.status).toBe('awaiting');
+    // Next tutor turn has no audio, so the mic reopens immediately -> listening.
+    expect(s.status).toBe('listening');
     expect(s.turns).toHaveLength(2);
     expect(s.turns[0]?.learnerReply).toBe('నేను బాగున్నాను');
     expect(s.turns[0]?.feedback).toBe('Nice — clear reply.');
@@ -229,25 +319,46 @@ describe('conversationStore', () => {
   it('usedCandidate is false when the transcript does not match any candidate', async () => {
     const b = bind({ tutorTurns: [turn(), turn()], transcript: 'ఏదో వేరే మాట', scaffoldRung: 0 });
     await useConversationStore.getState().start();
-    await useConversationStore.getState().startRecording();
-    await useConversationStore.getState().stopAndSend();
+    b.fireDrained();
+    await flushAsync();
+    await flushAsync();
     expect(b.recordAttempt.mock.calls[0]?.[0]).toMatchObject({ usedCandidate: false });
   });
 
   it('keeps the prior rung when recordAttempt returns null scaffoldRung', async () => {
-    bind({ tutorTurns: [turn(), turn()], rung: 2, scaffoldRung: null });
+    const b = bind({ tutorTurns: [turn(), turn()], rung: 2, scaffoldRung: null });
     await useConversationStore.getState().start();
     expect(useConversationStore.getState().rung).toBe(2);
-    await useConversationStore.getState().startRecording();
-    await useConversationStore.getState().stopAndSend();
+    b.fireDrained();
+    await flushAsync();
+    await flushAsync();
     expect(useConversationStore.getState().rung).toBe(2);
   });
 
-  it('a transcribe rejection sets error status without throwing', async () => {
-    bind({ transcribeReject: new Error('stt down') });
+  it('sendNow() force-submits the current listening turn without waiting for the VAD', async () => {
+    // No silence frames -> the endpointer never fires on its own.
+    const b = bind({ tutorTurns: [turn(), turn()], captureChunks: [speechFrame(), speechFrame()], transcript: 'నేను బాగున్నాను' });
     await useConversationStore.getState().start();
-    await useConversationStore.getState().startRecording();
-    await useConversationStore.getState().stopAndSend();
+    b.fireDrained();
+    await flushAsync();
+    expect(useConversationStore.getState().status).toBe('listening');
+
+    // VAD has not fired; force-submit manually.
+    expect(b.transcribe).not.toHaveBeenCalled();
+    await useConversationStore.getState().sendNow();
+    await flushAsync();
+
+    expect(b.transcribe).toHaveBeenCalledTimes(1);
+    expect(b.recordAttempt).toHaveBeenCalledTimes(1);
+    expect(useConversationStore.getState().turns).toHaveLength(2);
+  });
+
+  it('a transcribe rejection sets error status without throwing', async () => {
+    const b = bind({ transcribeReject: new Error('stt down') });
+    await useConversationStore.getState().start();
+    b.fireDrained();
+    await flushAsync();
+    await flushAsync();
     expect(useConversationStore.getState().status).toBe('error');
     expect(useConversationStore.getState().error).toBe('stt down');
   });
@@ -257,6 +368,25 @@ describe('conversationStore', () => {
     await useConversationStore.getState().start();
     expect(useConversationStore.getState().status).toBe('error');
     expect(useConversationStore.getState().error).toBe('tutor down');
+  });
+
+  it('reset() stops the mic, flushes playback, and returns to idle', async () => {
+    const b = bind({ rung: 0 });
+    await useConversationStore.getState().start();
+    b.fireDrained();
+    await flushAsync();
+    expect(useConversationStore.getState().status).toBe('listening');
+
+    await useConversationStore.getState().reset();
+    expect(b.captureStop).toHaveBeenCalled();
+    expect(b.flush).toHaveBeenCalled();
+    expect(useConversationStore.getState().status).toBe('idle');
+
+    // A drain event arriving after reset must not reopen the mic.
+    const startsBefore = b.captureStart.mock.calls.length;
+    b.fireDrained();
+    await flushAsync();
+    expect(b.captureStart.mock.calls.length).toBe(startsBefore);
   });
 
   it('errors when nothing is bound', async () => {
@@ -269,7 +399,7 @@ describe('conversationStore', () => {
     const b = bind({ rung: 0 });
     // Simulate a StrictMode double-bind with the same deps object shape.
     await useConversationStore.getState().start();
-    expect(useConversationStore.getState().status).toBe('awaiting');
+    expect(useConversationStore.getState().status).toBe('tutorSpeaking');
     expect(b.tutor).toHaveBeenCalledTimes(1);
   });
 });
