@@ -16,6 +16,7 @@ import type { SarvamSttClient } from './lib/sarvam.js';
 import { createProgressRoutes } from './routes/progress.js';
 import type { ProgressRepo } from './lib/progressRepo.js';
 import { createTranscribeRoute } from './routes/transcribe.js';
+import { createTutorRoute } from './routes/tutor.js';
 
 export interface AppDeps {
   getTokenClient: () => TokenMintClient;
@@ -61,6 +62,7 @@ export function createApp(deps: AppDeps): Hono {
     '/api/transcribe',
     createTranscribeRoute({ getCartesia: deps.getCartesiaClient, getSarvam: deps.getSarvamClient }),
   );
+  app.route('/api/tutor', createTutorRoute({ getModel: deps.getTranslateModel, getCartesia: deps.getCartesiaClient }));
 
   return app;
 }
