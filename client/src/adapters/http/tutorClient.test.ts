@@ -15,6 +15,7 @@ const goodTurn: TutorTurn = {
     { telugu: 'నేను బాగున్నాను', gloss: 'I am fine' },
     { telugu: 'పర్వాలేదు', gloss: 'Not bad' },
   ],
+  newVocab: [],
 };
 
 describe('tutorClient', () => {
@@ -22,7 +23,7 @@ describe('tutorClient', () => {
     const fetchFn = mockFetch(() => jsonResponse(goodTurn));
     const tutor = createTutorClient(fetchFn as unknown as typeof fetch);
 
-    const turn = await tutor([{ role: 'tutor', text: 'హాయ్' }, { role: 'learner', text: 'నేను' }]);
+    const turn = await tutor([{ role: 'tutor', text: 'హాయ్' }, { role: 'learner', text: 'నేను' }], []);
     expect(turn.tutor.telugu).toBe('మీరు ఎలా ఉన్నారు?');
     expect(turn.tutor.outputSampleRate).toBe(24000);
     expect(turn.candidates).toHaveLength(2);
@@ -32,13 +33,49 @@ describe('tutorClient', () => {
     expect(call?.[1]?.method).toBe('POST');
     expect(JSON.parse(call?.[1]?.body as string)).toEqual({
       history: [{ role: 'tutor', text: 'హాయ్' }, { role: 'learner', text: 'నేను' }],
+      knownVocab: [],
     });
+  });
+
+  it('puts knownVocab into the request body', async () => {
+    const fetchFn = mockFetch(() => jsonResponse(goodTurn));
+    const tutor = createTutorClient(fetchFn as unknown as typeof fetch);
+
+    await tutor([{ role: 'tutor', text: 'హాయ్' }], ['నేను', 'బాగున్నాను']);
+
+    const body = JSON.parse(fetchFn.mock.calls[0]?.[1]?.body as string) as {
+      history: unknown;
+      knownVocab: string[];
+    };
+    expect(body.knownVocab).toEqual(['నేను', 'బాగున్నాను']);
+  });
+
+  it('parses newVocab from the response', async () => {
+    const fetchFn = mockFetch(() =>
+      jsonResponse({ ...goodTurn, newVocab: [{ telugu: 'ధన్యవాదాలు', gloss: 'thank you' }] }),
+    );
+    const tutor = createTutorClient(fetchFn as unknown as typeof fetch);
+    const turn = await tutor([], []);
+    expect(turn.newVocab).toEqual([{ telugu: 'ధన్యవాదాలు', gloss: 'thank you' }]);
+  });
+
+  it('defaults newVocab to [] when absent from the response', async () => {
+    // Server body without a newVocab field at all.
+    const fetchFn = mockFetch(() =>
+      jsonResponse({
+        tutor: { telugu: 'హాయ్', gloss: 'Hi', audioBase64: '', outputSampleRate: 24000 },
+        candidates: [],
+      }),
+    );
+    const tutor = createTutorClient(fetchFn as unknown as typeof fetch);
+    const turn = await tutor([], []);
+    expect(turn.newVocab).toEqual([]);
   });
 
   it('passes feedback and learnerScore through when present', async () => {
     const fetchFn = mockFetch(() => jsonResponse({ ...goodTurn, feedback: 'Close — say నేను.', learnerScore: 75 }));
     const tutor = createTutorClient(fetchFn as unknown as typeof fetch);
-    const turn = await tutor([{ role: 'learner', text: 'నను' }]);
+    const turn = await tutor([{ role: 'learner', text: 'నను' }], []);
     expect(turn.feedback).toBe('Close — say నేను.');
     expect(turn.learnerScore).toBe(75);
   });
@@ -48,7 +85,7 @@ describe('tutorClient', () => {
       jsonResponse({ tutor: { telugu: 'హాయ్', gloss: 'Hi', audioBase64: '', outputSampleRate: 24000 }, candidates: [] }),
     );
     const tutor = createTutorClient(fetchFn as unknown as typeof fetch);
-    const turn = await tutor([]);
+    const turn = await tutor([], []);
     expect(turn.tutor.audioBase64).toBe('');
     expect(turn.candidates).toHaveLength(0);
   });
@@ -56,12 +93,12 @@ describe('tutorClient', () => {
   it('throws TutorApiError on a non-2xx', async () => {
     const fetchFn = mockFetch(() => jsonResponse({ error: 'Tutor request failed' }, 502));
     const tutor = createTutorClient(fetchFn as unknown as typeof fetch);
-    await expect(tutor([])).rejects.toBeInstanceOf(TutorApiError);
+    await expect(tutor([], [])).rejects.toBeInstanceOf(TutorApiError);
   });
 
   it('throws on a malformed body (missing tutor)', async () => {
     const fetchFn = mockFetch(() => jsonResponse({ candidates: [] }));
     const tutor = createTutorClient(fetchFn as unknown as typeof fetch);
-    await expect(tutor([])).rejects.toBeInstanceOf(TutorApiError);
+    await expect(tutor([], [])).rejects.toBeInstanceOf(TutorApiError);
   });
 });

@@ -90,12 +90,27 @@ function fakePlayback(): AudioPlaybackPort & {
 function fakeProgress(opts: {
   rung?: number;
   scaffoldRung?: number | null;
-}): ProgressPort & { recordAttempt: ReturnType<typeof vi.fn>; conversationRung: ReturnType<typeof vi.fn> } {
+  knownPhrases?: string[];
+  savePhraseReject?: boolean;
+}): ProgressPort & {
+  recordAttempt: ReturnType<typeof vi.fn>;
+  conversationRung: ReturnType<typeof vi.fn>;
+  savePhrase: ReturnType<typeof vi.fn>;
+  listPhrases: ReturnType<typeof vi.fn>;
+} {
   const recordAttempt = vi.fn(async () => ({ scaffoldRung: opts.scaffoldRung ?? null }));
   const conversationRung = vi.fn(async () => opts.rung ?? 0);
+  const savePhrase = vi.fn(async (p: { targetText: string }) => {
+    if (opts.savePhraseReject) throw new Error('save failed');
+    return p;
+  });
+  // listPhrases returns ProgressPhrase-shaped rows; only targetText is read.
+  const listPhrases = vi.fn(async () =>
+    (opts.knownPhrases ?? []).map((targetText) => ({ targetText })),
+  );
   return {
-    savePhrase: vi.fn(),
-    listPhrases: vi.fn(),
+    savePhrase,
+    listPhrases,
     deletePhrase: vi.fn(),
     dueReviews: vi.fn(),
     submitReview: vi.fn(),
@@ -103,7 +118,12 @@ function fakeProgress(opts: {
     appendSession: vi.fn(),
     listSessions: vi.fn(),
     conversationRung,
-  } as unknown as ProgressPort & { recordAttempt: ReturnType<typeof vi.fn>; conversationRung: ReturnType<typeof vi.fn> };
+  } as unknown as ProgressPort & {
+    recordAttempt: ReturnType<typeof vi.fn>;
+    conversationRung: ReturnType<typeof vi.fn>;
+    savePhrase: ReturnType<typeof vi.fn>;
+    listPhrases: ReturnType<typeof vi.fn>;
+  };
 }
 
 // A non-empty base64 PCM blob so playTutorAudio decodes to a non-empty Int16Array.
@@ -116,6 +136,7 @@ function turn(overrides: Partial<TutorTurn> = {}): TutorTurn {
       { telugu: 'నేను బాగున్నాను', gloss: 'I am fine' },
       { telugu: 'పర్వాలేదు', gloss: 'Not bad' },
     ],
+    newVocab: [],
     ...overrides,
   };
 }
@@ -124,6 +145,8 @@ interface Bound {
   tutor: ReturnType<typeof vi.fn>;
   recordAttempt: ReturnType<typeof vi.fn>;
   conversationRung: ReturnType<typeof vi.fn>;
+  savePhrase: ReturnType<typeof vi.fn>;
+  listPhrases: ReturnType<typeof vi.fn>;
   transcribe: ReturnType<typeof vi.fn>;
   enqueue: ReturnType<typeof vi.fn>;
   resume: ReturnType<typeof vi.fn>;
@@ -141,6 +164,8 @@ function bind(overrides: {
   rung?: number;
   scaffoldRung?: number | null;
   captureChunks?: Int16Array[];
+  knownPhrases?: string[];
+  savePhraseReject?: boolean;
 }): Bound {
   const turns = overrides.tutorTurns ?? [turn(), turn()];
   let i = 0;
@@ -154,7 +179,12 @@ function bind(overrides: {
     if (overrides.transcribeReject) throw overrides.transcribeReject;
     return overrides.transcript ?? 'నేను బాగున్నాను';
   });
-  const progress = fakeProgress({ rung: overrides.rung ?? 0, scaffoldRung: overrides.scaffoldRung ?? null });
+  const progress = fakeProgress({
+    rung: overrides.rung ?? 0,
+    scaffoldRung: overrides.scaffoldRung ?? null,
+    ...(overrides.knownPhrases !== undefined ? { knownPhrases: overrides.knownPhrases } : {}),
+    ...(overrides.savePhraseReject !== undefined ? { savePhraseReject: overrides.savePhraseReject } : {}),
+  });
   const playback = fakePlayback();
   const cap = fakeCapture(overrides.captureChunks ?? speechThenSilence());
   const deps: ConversationDeps = {
@@ -169,6 +199,8 @@ function bind(overrides: {
     tutor,
     recordAttempt: progress.recordAttempt,
     conversationRung: progress.conversationRung,
+    savePhrase: progress.savePhrase,
+    listPhrases: progress.listPhrases,
     transcribe,
     enqueue: playback.enqueue,
     resume: playback.resume,
@@ -185,12 +217,19 @@ async function flushAsync(): Promise<void> {
 }
 
 beforeEach(() => {
+  try {
+    localStorage.clear();
+  } catch {
+    // No storage in this env; the store defaults to hands-free.
+  }
   useConversationStore.setState({
     status: 'idle',
     history: [],
     turns: [],
     candidates: [],
     rung: 0,
+    lastNewVocab: [],
+    inputMode: 'handsfree',
     lastFeedback: undefined,
     error: undefined,
   });
@@ -205,7 +244,7 @@ describe('conversationStore (hands-free)', () => {
     expect(s.status).toBe('tutorSpeaking');
     expect(s.rung).toBe(1);
     expect(b.conversationRung).toHaveBeenCalledTimes(1);
-    expect(b.tutor).toHaveBeenCalledWith([]);
+    expect(b.tutor).toHaveBeenCalledWith([], []);
 
     // Tutor utterance shown with client-computed romanization (never from server).
     expect(s.turns).toHaveLength(1);
@@ -401,5 +440,111 @@ describe('conversationStore (hands-free)', () => {
     await useConversationStore.getState().start();
     expect(useConversationStore.getState().status).toBe('tutorSpeaking');
     expect(b.tutor).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('conversationStore (vocabulary loop)', () => {
+  it('start() loads listPhrases as knownVocab and passes it to the tutor turn', async () => {
+    const b = bind({ rung: 0, knownPhrases: ['నేను', 'మీరు'] });
+    await useConversationStore.getState().start();
+
+    expect(b.listPhrases).toHaveBeenCalledTimes(1);
+    // The opening tutor call carries the loaded known vocab as its second arg.
+    expect(b.tutor.mock.calls[0]?.[1]).toEqual(['నేను', 'మీరు']);
+  });
+
+  it('saves each new word to the deck with origin conversation + a romanization, and surfaces it', async () => {
+    const first = turn({ newVocab: [{ telugu: 'ధన్యవాదాలు', gloss: 'thank you' }] });
+    const b = bind({ tutorTurns: [first, turn()], rung: 0 });
+    await useConversationStore.getState().start();
+
+    expect(b.savePhrase).toHaveBeenCalledTimes(1);
+    const saved = b.savePhrase.mock.calls[0]?.[0];
+    expect(saved).toMatchObject({
+      id: `vocab-${encodeURIComponent('ధన్యవాదాలు')}`,
+      sourceText: 'thank you',
+      sourceLang: 'en',
+      targetText: 'ధన్యవాదాలు',
+      targetLang: 'te',
+      origin: 'conversation',
+    });
+    expect(typeof saved.romanization).toBe('string');
+    expect(saved.romanization.length).toBeGreaterThan(0);
+
+    // Surfaced in store state, glossed + romanized, for the inline display.
+    const view = useConversationStore.getState().lastNewVocab;
+    expect(view).toHaveLength(1);
+    expect(view[0]).toMatchObject({ telugu: 'ధన్యవాదాలు', gloss: 'thank you' });
+    expect(view[0]?.romanization.length).toBeGreaterThan(0);
+  });
+
+  it('adds saved words to knownVocab so the next tutor turn builds beyond them', async () => {
+    const first = turn({ newVocab: [{ telugu: 'ధన్యవాదాలు', gloss: 'thank you' }] });
+    const b = bind({ tutorTurns: [first, turn()], rung: 0, knownPhrases: ['నేను'] });
+    await useConversationStore.getState().start();
+    b.fireDrained();
+    await flushAsync();
+    await flushAsync();
+
+    // The second tutor call's knownVocab includes the original word plus the one
+    // the first turn introduced.
+    const secondKnown = b.tutor.mock.calls[1]?.[1] as string[];
+    expect(secondKnown).toContain('నేను');
+    expect(secondKnown).toContain('ధన్యవాదాలు');
+  });
+
+  it('a savePhrase rejection does not break the conversation loop', async () => {
+    const first = turn({ newVocab: [{ telugu: 'ధన్యవాదాలు', gloss: 'thank you' }] });
+    const b = bind({ tutorTurns: [first, turn()], rung: 0, savePhraseReject: true });
+    await useConversationStore.getState().start();
+
+    // Save threw but the turn still played and we reached tutorSpeaking.
+    expect(b.savePhrase).toHaveBeenCalledTimes(1);
+    expect(useConversationStore.getState().status).toBe('tutorSpeaking');
+    expect(useConversationStore.getState().error).toBeUndefined();
+    // Surfaced for display even though the deck write failed.
+    expect(useConversationStore.getState().lastNewVocab).toHaveLength(1);
+  });
+});
+
+describe('conversationStore (input mode)', () => {
+  it("hands-free: the VAD utterance event auto-submits", async () => {
+    const b = bind({ tutorTurns: [turn(), turn()], rung: 0 });
+    useConversationStore.getState().setInputMode('handsfree');
+    await useConversationStore.getState().start();
+    b.fireDrained();
+    await flushAsync();
+    await flushAsync();
+    // The VAD fired on the speech-then-silence frames and submitted on its own.
+    expect(b.transcribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('tap-to-stop: the VAD utterance event does NOT auto-submit; only sendNow does', async () => {
+    const b = bind({ tutorTurns: [turn(), turn()], rung: 0 });
+    useConversationStore.getState().setInputMode('taptostop');
+    await useConversationStore.getState().start();
+    b.fireDrained();
+    await flushAsync();
+    await flushAsync();
+
+    // Speech-then-silence would trip the VAD, but tap-to-stop ignores it: still
+    // listening, nothing transcribed.
+    expect(useConversationStore.getState().status).toBe('listening');
+    expect(b.transcribe).not.toHaveBeenCalled();
+
+    // Tapping "Done speaking" is what ends the turn.
+    await useConversationStore.getState().sendNow();
+    await flushAsync();
+    expect(b.transcribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('setInputMode persists the choice to localStorage', () => {
+    bind({ rung: 0 });
+    useConversationStore.getState().setInputMode('taptostop');
+    expect(localStorage.getItem('conversation.inputMode')).toBe('taptostop');
+    expect(useConversationStore.getState().inputMode).toBe('taptostop');
+
+    useConversationStore.getState().setInputMode('handsfree');
+    expect(localStorage.getItem('conversation.inputMode')).toBe('handsfree');
   });
 });

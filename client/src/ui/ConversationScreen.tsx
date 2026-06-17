@@ -7,7 +7,12 @@
 // local romanize util only; adapters never reach ui/.
 
 import type { ReactElement } from 'react';
-import { useConversationStore, type CandidateView } from '../store/conversationStore';
+import {
+  useConversationStore,
+  type CandidateView,
+  type InputMode,
+  type NewVocabView,
+} from '../store/conversationStore';
 
 // Non-gamified phrasing of the current support level so the fade is visible.
 const SUPPORT_LABEL: Record<number, string> = {
@@ -56,14 +61,63 @@ function Scaffold({ rung, candidates }: { rung: number; candidates: CandidateVie
   );
 }
 
+// Hands-free vs tap-to-stop. In hands-free the VAD ends the turn; in tap-to-stop
+// the learner ends it with "Done speaking". Two buttons reflecting inputMode.
+function ModeToggle({
+  inputMode,
+  onChange,
+}: {
+  inputMode: InputMode;
+  onChange: (mode: InputMode) => void;
+}): ReactElement {
+  return (
+    <div className="conv-mode" role="group" aria-label="Input mode">
+      <button
+        type="button"
+        className="conv-mode-option"
+        aria-pressed={inputMode === 'handsfree'}
+        onClick={() => onChange('handsfree')}
+      >
+        Hands-free
+      </button>
+      <button
+        type="button"
+        className="conv-mode-option"
+        aria-pressed={inputMode === 'taptostop'}
+        onClick={() => onChange('taptostop')}
+      >
+        Tap-to-stop
+      </button>
+    </div>
+  );
+}
+
+// Subtle, non-gamified line for the 1-2 words the tutor introduced this turn.
+function NewVocabLine({ vocab }: { vocab: NewVocabView[] }): ReactElement | null {
+  if (vocab.length === 0) return null;
+  return (
+    <p className="conv-new-vocab" aria-label="New words">
+      {vocab.map((v, i) => (
+        <span className="conv-new-vocab-item" key={`${v.telugu}-${i}`}>
+          {i > 0 ? '; ' : 'New: '}
+          <span className="te">{v.telugu}</span> ({v.romanization}) — {v.gloss}
+        </span>
+      ))}
+    </p>
+  );
+}
+
 export function ConversationScreen(): ReactElement {
   const status = useConversationStore((s) => s.status);
   const turns = useConversationStore((s) => s.turns);
   const candidates = useConversationStore((s) => s.candidates);
   const rung = useConversationStore((s) => s.rung);
+  const lastNewVocab = useConversationStore((s) => s.lastNewVocab);
+  const inputMode = useConversationStore((s) => s.inputMode);
   const lastFeedback = useConversationStore((s) => s.lastFeedback);
   const error = useConversationStore((s) => s.error);
   const sendNow = useConversationStore((s) => s.sendNow);
+  const setInputMode = useConversationStore((s) => s.setInputMode);
   const reset = useConversationStore((s) => s.reset);
 
   if (status === 'error') {
@@ -111,11 +165,20 @@ export function ConversationScreen(): ReactElement {
         ))}
       </div>
 
+      {/* The 1-2 words the tutor introduced this turn, glossed inline. */}
+      <NewVocabLine vocab={lastNewVocab} />
+
       <p className="conv-state" aria-live="polite">
         {tutorSpeaking ? 'Tutor is speaking...' : null}
-        {listening ? 'Your turn — just speak' : null}
+        {listening
+          ? inputMode === 'taptostop'
+            ? 'Your turn — speak, then tap Done'
+            : 'Your turn — just speak'
+          : null}
         {thinking ? 'Thinking...' : null}
       </p>
+
+      <ModeToggle inputMode={inputMode} onChange={setInputMode} />
 
       {/* Scaffold shows only while it is the learner's turn to speak. */}
       {listening ? (
@@ -125,9 +188,14 @@ export function ConversationScreen(): ReactElement {
           </p>
           <Scaffold rung={rung} candidates={candidates} />
 
-          {/* Manual fallback: force-submit when the VAD misses the pause. */}
+          {/* Tap-to-stop: this is the primary control that ends the turn.
+              Hands-free: it's the fallback when the VAD misses the pause. */}
           <div className="review-controls">
-            <button type="button" className="conv-done" onClick={() => void sendNow()}>
+            <button
+              type="button"
+              className={inputMode === 'taptostop' ? 'conv-done conv-done-primary' : 'conv-done'}
+              onClick={() => void sendNow()}
+            >
               Done speaking
             </button>
           </div>

@@ -19,6 +19,12 @@ export interface TutorCandidate {
   gloss: string;
 }
 
+/** A word the tutor introduced this turn (1-2), to seed the review deck. */
+export interface TutorVocab {
+  telugu: string;
+  gloss: string;
+}
+
 export interface TutorTurn {
   tutor: TutorUtterance;
   candidates: TutorCandidate[];
@@ -26,6 +32,8 @@ export interface TutorTurn {
   feedback?: string;
   /** 0-100, present only when the last turn in the posted history was the learner. */
   learnerScore?: number;
+  /** The 1-2 new words introduced this turn; [] when absent in the response. */
+  newVocab: TutorVocab[];
 }
 
 export interface TurnMessage {
@@ -33,7 +41,7 @@ export interface TurnMessage {
   text: string;
 }
 
-export type TutorClient = (history: TurnMessage[]) => Promise<TutorTurn>;
+export type TutorClient = (history: TurnMessage[], knownVocab: string[]) => Promise<TutorTurn>;
 
 export class TutorApiError extends Error {
   readonly status: number;
@@ -48,11 +56,11 @@ export class TutorApiError extends Error {
 type FetchFn = typeof fetch;
 
 export function createTutorClient(fetchFn: FetchFn = fetch): TutorClient {
-  return async (history) => {
+  return async (history, knownVocab) => {
     const res = await fetchFn('/api/tutor/turn', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ history }),
+      body: JSON.stringify({ history, knownVocab }),
     });
     if (!res.ok) {
       let detail = `status ${res.status}`;
@@ -73,7 +81,8 @@ export function createTutorClient(fetchFn: FetchFn = fetch): TutorClient {
     if (!isTutorTurn(body)) {
       throw new TutorApiError(res.status, '/api/tutor/turn returned a malformed body');
     }
-    return body;
+    // newVocab is optional on the wire; normalize a missing value to [].
+    return { ...body, newVocab: body.newVocab ?? [] };
   };
 }
 
@@ -81,7 +90,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isTutorTurn(value: unknown): value is TutorTurn {
+// Narrows to a turn where newVocab may be absent (the caller defaults it to []).
+function isTutorTurn(value: unknown): value is Omit<TutorTurn, 'newVocab'> & { newVocab?: TutorVocab[] } {
   if (!isRecord(value)) return false;
   const tutor = value.tutor;
   if (
@@ -99,5 +109,11 @@ function isTutorTurn(value: unknown): value is TutorTurn {
   }
   if (value.feedback !== undefined && typeof value.feedback !== 'string') return false;
   if (value.learnerScore !== undefined && typeof value.learnerScore !== 'number') return false;
+  if (value.newVocab !== undefined) {
+    if (!Array.isArray(value.newVocab)) return false;
+    for (const v of value.newVocab) {
+      if (!isRecord(v) || typeof v.telugu !== 'string' || typeof v.gloss !== 'string') return false;
+    }
+  }
   return true;
 }

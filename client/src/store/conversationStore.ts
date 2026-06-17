@@ -26,16 +26,24 @@ export interface TurnMessage {
   text: string;
 }
 
+/** A word the tutor introduced this turn (1-2), to seed the FSRS review deck. */
+export interface TutorVocab {
+  telugu: string;
+  gloss: string;
+}
+
 /** The tutor's next utterance plus the scaffold and grading of the last reply. */
 export interface TutorTurn {
   tutor: { telugu: string; gloss: string; audioBase64: string; outputSampleRate: number };
   candidates: Array<{ telugu: string; gloss: string }>;
   feedback?: string;
   learnerScore?: number;
+  newVocab: TutorVocab[];
 }
 
-/** Post the dialogue history, get the next turn. Matches the tutor client. */
-export type TutorFn = (history: TurnMessage[]) => Promise<TutorTurn>;
+/** Post the dialogue history + the learner's known vocab, get the next turn.
+ *  Matches the tutor client. */
+export type TutorFn = (history: TurnMessage[], knownVocab: string[]) => Promise<TutorTurn>;
 
 /** One-shot STT of buffered PCM. Matches the transcribe client's signature. */
 export type TranscribeFn = (
@@ -74,6 +82,17 @@ export interface CandidateView {
   gloss: string;
 }
 
+/** A new word the tutor introduced this turn, glossed + client-romanized. */
+export interface NewVocabView {
+  telugu: string;
+  romanization: string;
+  gloss: string;
+}
+
+/** Hands-free: the VAD ends the turn (auto-submit). Tap-to-stop: only the
+ *  "Done speaking" button (sendNow) ends it; the VAD never auto-submits. */
+export type InputMode = 'handsfree' | 'taptostop';
+
 /** One exchange in the on-screen transcript: a tutor utterance and, once the
  *  learner has answered it, their transcribed reply and any feedback. */
 export interface Exchange {
@@ -92,13 +111,19 @@ export interface ConversationStoreState {
   turns: Exchange[];
   candidates: CandidateView[];
   rung: number;
+  /** The 1-2 words the tutor introduced this turn, for an inline glossed line. */
+  lastNewVocab: NewVocabView[];
+  /** Whether the VAD auto-submits (handsfree) or the user taps (taptostop). */
+  inputMode: InputMode;
   lastFeedback?: string | undefined;
   error?: string | undefined;
 
   start: () => Promise<void>;
-  /** Manual fallback: force-end the current listening turn and submit whatever
-   *  was captured (for noisy rooms / if the VAD misses the pause). */
+  /** In tap-to-stop this is the only way to end a turn; in hands-free it is the
+   *  fallback when the VAD misses the pause. Force-submits whatever was captured. */
   sendNow: () => Promise<void>;
+  /** Switch hands-free vs tap-to-stop; persisted to localStorage. */
+  setInputMode: (mode: InputMode) => void;
   /** Pause/stop the conversation: stop the mic and flush any tutor audio. */
   reset: () => Promise<void>;
 }
@@ -168,6 +193,42 @@ function toCandidateViews(cs: Array<{ telugu: string; gloss: string }>): Candida
   return cs.map((c) => ({ telugu: c.telugu, romanization: romanize(c.telugu), gloss: c.gloss }));
 }
 
+function toNewVocabViews(vs: TutorVocab[]): NewVocabView[] {
+  return vs.map((v) => ({ telugu: v.telugu, romanization: romanize(v.telugu), gloss: v.gloss }));
+}
+
+// Deterministic per-word card id so re-encountering a word UPSERTs server-side
+// (no duplicate review cards). encodeURIComponent keeps it id-safe.
+function vocabId(telugu: string): string {
+  return `vocab-${encodeURIComponent(telugu)}`;
+}
+
+// Cap the known-vocab list passed to the tutor to the most recent N words so the
+// request body (and the model's working set) stays bounded across long sessions.
+const KNOWN_VOCAB_CAP = 60;
+
+const INPUT_MODE_KEY = 'conversation.inputMode';
+
+// localStorage is a browser global, not an adapter, so the store may touch it
+// directly. Guarded for non-browser/edge cases (and defensively for the test).
+function loadInputMode(): InputMode {
+  try {
+    if (typeof localStorage === 'undefined') return 'handsfree';
+    return localStorage.getItem(INPUT_MODE_KEY) === 'taptostop' ? 'taptostop' : 'handsfree';
+  } catch {
+    return 'handsfree';
+  }
+}
+
+function persistInputMode(mode: InputMode): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(INPUT_MODE_KEY, mode);
+  } catch {
+    // Private-mode / disabled storage: keep the in-memory choice, ignore.
+  }
+}
+
 // Module-level injected deps and per-turn capture state. Owned here (not in
 // React) so StrictMode replays cannot double-bind or strand a live mic.
 let deps: ConversationDeps | null = null;
@@ -193,10 +254,16 @@ let listeningStartedAt = 0;
 // the turn is shown so the recorded attempt reflects the state at reply time.
 let pendingPrompt = '';
 let pendingRung = 0;
+// The learner's known vocabulary, loaded from the deck at start() and grown as
+// the tutor introduces words. Passed to every tutor turn so each turn builds on
+// what the learner has already met. Capped to the most recent KNOWN_VOCAB_CAP.
+let knownVocab: string[] = [];
 
-/** Wire the injected ports/fns. Idempotent: same deps object rebinds to nothing. */
+/** Wire the injected ports/fns. Idempotent: same deps object rebinds to nothing.
+ *  Reads the persisted input-mode here (bind happens at composition time). */
 export function bindConversation(next: ConversationDeps): void {
   deps = next;
+  useConversationStore.setState({ inputMode: loadInputMode() });
 }
 
 // Decode + enqueue the tutor's voiced utterance. resume() first (the user-gesture
@@ -210,6 +277,36 @@ async function playTutorAudio(audioBase64: string, sampleRate: number): Promise<
   await deps.playback.resume();
   deps.playback.enqueue({ data, sampleRate, channels: 1 });
   return true;
+}
+
+// Save the words the tutor introduced this turn into the deck. Each becomes a
+// review card server-side (so conversation POPULATES the FSRS Review queue), and
+// is added to the in-memory known-vocab so later turns build beyond it. A
+// deterministic per-word id makes a re-encounter an UPSERT (no dupes). Per-word
+// failures are swallowed so a flaky save never breaks the conversation.
+async function saveNewVocab(newVocab: TutorVocab[]): Promise<void> {
+  const d = deps;
+  if (d === null) return;
+  for (const v of newVocab) {
+    try {
+      await d.progress.savePhrase({
+        id: vocabId(v.telugu),
+        sourceText: v.gloss,
+        sourceLang: 'en',
+        targetText: v.telugu,
+        targetLang: 'te',
+        romanization: romanize(v.telugu),
+        origin: 'conversation',
+      });
+      if (!knownVocab.includes(v.telugu)) knownVocab.push(v.telugu);
+    } catch {
+      // Best-effort: a save failure must not interrupt the spoken exchange.
+    }
+  }
+  // Keep the working set bounded after growth.
+  if (knownVocab.length > KNOWN_VOCAB_CAP) {
+    knownVocab = knownVocab.slice(knownVocab.length - KNOWN_VOCAB_CAP);
+  }
 }
 
 export const useConversationStore = create<ConversationStoreState>()((set, get) => {
@@ -240,13 +337,18 @@ export const useConversationStore = create<ConversationStoreState>()((set, get) 
           if (token !== turnToken) break;
           buffer.push(chunk.data);
           const result = endpointer?.push(chunk.data);
-          if (result?.event === 'utterance') {
+          if (result?.event === 'utterance' && get().inputMode === 'handsfree') {
+            // Hands-free: the VAD ends the turn. Use its trimmed PCM (trailing
+            // silence removed) and auto-submit the moment it detects the pause.
+            // Detached so stop() inside submit() can unwind this iterable.
             endpointedPcm = result.pcm;
-            // Auto-submit the moment the VAD detects the pause. Detached from the
-            // drain loop so stop() inside submit() can unwind this iterable.
             void submit(token);
             break;
           }
+          // Tap-to-stop: the VAD never ends the turn. The endpointer's reset
+          // after each utterance would drop earlier speech, so we ignore its
+          // segments and let submit() fall back to the full raw buffer when the
+          // learner taps "Done speaking" (sendNow).
         }
       })();
     } catch (err) {
@@ -290,7 +392,7 @@ export const useConversationStore = create<ConversationStoreState>()((set, get) 
       const usedCandidate = matchesCandidate(transcript, shownCandidates);
 
       const history: TurnMessage[] = [...get().history, { role: 'learner', text: transcript }];
-      const turn = await d.tutor(history);
+      const turn = await d.tutor(history, knownVocab);
 
       // Record the attempt against the tutor turn the learner was replying to,
       // at the rung that was actually shown. score comes from the model's grade.
@@ -308,6 +410,7 @@ export const useConversationStore = create<ConversationStoreState>()((set, get) 
 
       const tutorView = toTutorView(turn.tutor);
       const candidates = toCandidateViews(turn.candidates);
+      const newVocabView = toNewVocabViews(turn.newVocab);
       const nextRung = recorded.scaffoldRung ?? repliedRung;
 
       // Attach the learner's reply + feedback to the exchange they answered,
@@ -327,9 +430,12 @@ export const useConversationStore = create<ConversationStoreState>()((set, get) 
         turns,
         candidates,
         rung: nextRung,
+        lastNewVocab: newVocabView,
         lastFeedback: turn.feedback,
         error: undefined,
       });
+      // Persist this turn's new words to the deck (each becomes a review card).
+      await saveNewVocab(turn.newVocab);
       await beginTutorTurn(turn.tutor.audioBase64, turn.tutor.outputSampleRate);
     } catch (err) {
       // Best-effort mic teardown so a failed turn never strands the capture.
@@ -376,6 +482,8 @@ export const useConversationStore = create<ConversationStoreState>()((set, get) 
     turns: [],
     candidates: [],
     rung: 0,
+    lastNewVocab: [],
+    inputMode: loadInputMode(),
     lastFeedback: undefined,
     error: undefined,
 
@@ -395,13 +503,19 @@ export const useConversationStore = create<ConversationStoreState>()((set, get) 
         history: [],
         turns: [],
         candidates: [],
+        lastNewVocab: [],
         lastFeedback: undefined,
       });
       try {
         const rung = await d.progress.conversationRung();
-        const turn = await d.tutor([]);
+        // Seed the learner's known vocab from the deck (most recent N) so the
+        // tutor can build on words they've already met.
+        const phrases = await d.progress.listPhrases();
+        knownVocab = phrases.map((p) => p.targetText).slice(-KNOWN_VOCAB_CAP);
+        const turn = await d.tutor([], knownVocab);
         const tutorView = toTutorView(turn.tutor);
         const candidates = toCandidateViews(turn.candidates);
+        const newVocabView = toNewVocabViews(turn.newVocab);
         pendingPrompt = turn.tutor.telugu;
         pendingRung = rung;
         set({
@@ -410,8 +524,10 @@ export const useConversationStore = create<ConversationStoreState>()((set, get) 
           history: [{ role: 'tutor', text: turn.tutor.telugu }],
           turns: [{ tutor: tutorView }],
           candidates,
+          lastNewVocab: newVocabView,
           lastFeedback: undefined,
         });
+        await saveNewVocab(turn.newVocab);
         await beginTutorTurn(turn.tutor.audioBase64, turn.tutor.outputSampleRate);
       } catch (err) {
         set({ status: 'error', error: errorMessage(err) });
@@ -419,9 +535,15 @@ export const useConversationStore = create<ConversationStoreState>()((set, get) 
     },
 
     sendNow: async () => {
-      // Force-submit whatever has been captured this turn (noisy room / VAD miss).
+      // Force-submit whatever has been captured this turn. In tap-to-stop this is
+      // the normal way to end a turn; in hands-free it's the VAD-miss fallback.
       if (get().status !== 'listening') return;
       await submit(turnToken);
+    },
+
+    setInputMode: (mode) => {
+      persistInputMode(mode);
+      set({ inputMode: mode });
     },
 
     reset: async () => {
@@ -439,12 +561,14 @@ export const useConversationStore = create<ConversationStoreState>()((set, get) 
       buffer = [];
       endpointer = null;
       endpointedPcm = null;
+      knownVocab = [];
       set({
         status: 'idle',
         history: [],
         turns: [],
         candidates: [],
         rung: 0,
+        lastNewVocab: [],
         lastFeedback: undefined,
         error: undefined,
       });

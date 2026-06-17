@@ -10,6 +10,7 @@ import {
   type CandidateView,
   type ConversationStoreState,
   type Exchange,
+  type NewVocabView,
 } from '../store/conversationStore';
 import { ConversationScreen } from './ConversationScreen';
 
@@ -47,6 +48,8 @@ function render(state: Partial<ConversationStoreState>): void {
     turns: [],
     candidates: [],
     rung: 0,
+    lastNewVocab: [],
+    inputMode: 'handsfree',
     lastFeedback: undefined,
     error: undefined,
     ...state,
@@ -137,5 +140,42 @@ describe('ConversationScreen', () => {
     const text = container.textContent ?? '';
     expect(text).toContain('You said:');
     expect(text).toContain('Clear reply.');
+  });
+
+  it('the mode toggle reflects hands-free as the pressed option', () => {
+    render({ status: 'listening', turns: [tutorExchange], candidates, rung: 0, inputMode: 'handsfree' });
+    const buttons = Array.from(container.querySelectorAll('button'));
+    const handsfree = buttons.find((b) => b.textContent === 'Hands-free');
+    const taptostop = buttons.find((b) => b.textContent === 'Tap-to-stop');
+    expect(handsfree?.getAttribute('aria-pressed')).toBe('true');
+    expect(taptostop?.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('the mode toggle reflects tap-to-stop as the pressed option', () => {
+    render({ status: 'listening', turns: [tutorExchange], candidates, rung: 0, inputMode: 'taptostop' });
+    const buttons = Array.from(container.querySelectorAll('button'));
+    const handsfree = buttons.find((b) => b.textContent === 'Hands-free');
+    const taptostop = buttons.find((b) => b.textContent === 'Tap-to-stop');
+    expect(taptostop?.getAttribute('aria-pressed')).toBe('true');
+    expect(handsfree?.getAttribute('aria-pressed')).toBe('false');
+    // Done speaking stays the always-shown control while listening.
+    expect(Array.from(buttons).map((b) => b.textContent)).toContain('Done speaking');
+  });
+
+  it('shows the new-words line, glossed, when lastNewVocab is set', () => {
+    const newVocab: NewVocabView[] = [
+      { telugu: 'ధన్యవాదాలు', romanization: 'dhanyavādālu', gloss: 'thank you' },
+    ];
+    render({ status: 'listening', turns: [tutorExchange], candidates, rung: 0, lastNewVocab: newVocab });
+    const text = container.textContent ?? '';
+    expect(text).toContain('New:');
+    expect(text).toContain('ధన్యవాదాలు');
+    expect(text).toContain('dhanyavādālu');
+    expect(text).toContain('thank you');
+  });
+
+  it('omits the new-words line when lastNewVocab is empty', () => {
+    render({ status: 'listening', turns: [tutorExchange], candidates, rung: 0, lastNewVocab: [] });
+    expect(container.querySelector('.conv-new-vocab')).toBeNull();
   });
 });
