@@ -1,9 +1,14 @@
 import { useState, type ReactElement } from 'react';
 import type { AudioPlaybackPort } from '../ports/AudioPlaybackPort';
 import type { CoordinatorState } from '../core/coordinator/types';
+import type { TranslationDirection } from '../ports/types';
 import { useDrillStore } from '../store/drillStore';
+import { useReviewStore } from '../store/reviewStore';
 import { DebugPanel } from './DebugPanel';
+import { ReviewScreen } from './ReviewScreen';
 import { TranscriptPanes } from './TranscriptPanes';
+
+type Screen = 'practice' | 'review';
 
 export interface AppProps {
   /** Injected by the composition root; resume() must run inside a user gesture. */
@@ -41,8 +46,25 @@ export function App({ playback }: AppProps): ReactElement {
     return samples.length > 0 ? samples[samples.length - 1] ?? null : null;
   });
   const [debugOpen, setDebugOpen] = useState(false);
+  const [screen, setScreen] = useState<Screen>('practice');
 
   const offline = import.meta.env.VITE_TRANSLATION === 'fake';
+
+  // Only one screen may hold the mic at a time. Switching away from Practice
+  // closes any live streaming session; switching away from Review stops its
+  // capture. The user is on one screen at a time, so this is the only contention.
+  const switchScreen = (target: Screen): void => {
+    if (target === screen) return;
+    if (target === 'review') {
+      void useDrillStore.getState().close();
+      setScreen('review');
+      void useReviewStore.getState().loadDue();
+    } else {
+      const review = useReviewStore.getState();
+      if (review.status === 'recording') void review.stopAndGrade();
+      setScreen('practice');
+    }
+  };
 
   // While listening, the bare state is misleading: the mic takes a moment to go
   // live, and speaking before it does drops your first words. Gate the cue on
@@ -81,24 +103,108 @@ export function App({ playback }: AppProps): ReactElement {
         {offline ? <span className="badge">Offline mode</span> : null}
       </header>
 
+      <nav className="mode-tabs" aria-label="Mode">
+        <button
+          type="button"
+          className={screen === 'practice' ? 'mode-tab mode-tab-active' : 'mode-tab'}
+          aria-pressed={screen === 'practice'}
+          onClick={() => switchScreen('practice')}
+        >
+          Practice
+        </button>
+        <button
+          type="button"
+          className={screen === 'review' ? 'mode-tab mode-tab-active' : 'mode-tab'}
+          aria-pressed={screen === 'review'}
+          onClick={() => switchScreen('review')}
+        >
+          Review
+        </button>
+      </nav>
+
+      {screen === 'review' ? (
+        <ReviewScreen />
+      ) : (
+        <PracticeScreen
+          coordinatorState={coordinatorState}
+          direction={direction}
+          lastError={lastError}
+          statusText={statusText}
+          speakNow={speakNow}
+          lastFirstAudioMs={lastFirstAudioMs}
+          canArm={canArm}
+          canStart={canStart}
+          canStop={canStop}
+          canToggle={canToggle}
+          debugOpen={debugOpen}
+          onArm={() => void arm(direction)}
+          onStart={onStart}
+          onStop={() => void stopListening()}
+          onToggle={() => void toggleDirection()}
+          onToggleDebug={() => setDebugOpen((v) => !v)}
+        />
+      )}
+    </main>
+  );
+}
+
+interface PracticeScreenProps {
+  coordinatorState: CoordinatorState;
+  direction: TranslationDirection;
+  lastError: string | null;
+  statusText: string;
+  speakNow: boolean;
+  lastFirstAudioMs: number | null;
+  canArm: boolean;
+  canStart: boolean;
+  canStop: boolean;
+  canToggle: boolean;
+  debugOpen: boolean;
+  onArm: () => void;
+  onStart: () => void;
+  onStop: () => void;
+  onToggle: () => void;
+  onToggleDebug: () => void;
+}
+
+function PracticeScreen({
+  coordinatorState,
+  direction,
+  lastError,
+  statusText,
+  speakNow,
+  lastFirstAudioMs,
+  canArm,
+  canStart,
+  canStop,
+  canToggle,
+  debugOpen,
+  onArm,
+  onStart,
+  onStop,
+  onToggle,
+  onToggleDebug,
+}: PracticeScreenProps): ReactElement {
+  return (
+    <>
       <section className="controls" aria-label="Session controls">
         <span className="session-state">
           <span className={`dot dot-${coordinatorState}`} aria-hidden="true" />
           <span className="session-state-label">{coordinatorState}</span>
         </span>
-        <button type="button" disabled={!canArm} onClick={() => void arm(direction)}>
+        <button type="button" disabled={!canArm} onClick={onArm}>
           Arm
         </button>
         <button type="button" disabled={!canStart} onClick={onStart}>
           Start
         </button>
-        <button type="button" disabled={!canStop} onClick={() => void stopListening()}>
+        <button type="button" disabled={!canStop} onClick={onStop}>
           Stop
         </button>
-        <button type="button" disabled={!canToggle} onClick={() => void toggleDirection()}>
+        <button type="button" disabled={!canToggle} onClick={onToggle}>
           {direction.source === 'en' ? 'EN -> TE' : 'TE -> EN'}
         </button>
-        <button type="button" className="debug-toggle" onClick={() => setDebugOpen((v) => !v)}>
+        <button type="button" className="debug-toggle" onClick={onToggleDebug}>
           {debugOpen ? 'Hide debug' : 'Show debug'}
         </button>
       </section>
@@ -123,6 +229,6 @@ export function App({ playback }: AppProps): ReactElement {
       {debugOpen ? <DebugPanel /> : null}
 
       <TranscriptPanes />
-    </main>
+    </>
   );
 }

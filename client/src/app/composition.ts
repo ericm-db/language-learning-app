@@ -9,10 +9,14 @@ import { LiveTranslateAdapter } from '../adapters/gemini/LiveTranslateAdapter';
 import { ComposedTranslationAdapter } from '../adapters/composed/ComposedTranslationAdapter';
 import { StreamingTranslationAdapter } from '../adapters/stream/StreamingTranslationAdapter';
 import { createTranslateClient } from '../adapters/http/translateClient';
+import { createTranscribeClient } from '../adapters/http/transcribeClient';
+import { createProgressClient } from '../adapters/http/progressClient';
+import { CoachClient } from '../adapters/http/CoachClient';
 import { initTokenPrefetch, tokenProvider } from '../adapters/http/tokenProvider';
 import { createDrillCoordinator } from '../core/coordinator/DrillCoordinator';
 import type { TranslationPort } from '../ports/TranslationPort';
 import { useDrillStore } from '../store/drillStore';
+import { bindReview } from '../store/reviewStore';
 
 // 'stream': low-latency WebSocket relay (Step 2). Streams audio to the server,
 //   which endpoints and streams results back. Needs the long-lived server (Fly).
@@ -56,3 +60,14 @@ export const coordinator = createDrillCoordinator({
 });
 
 useDrillStore.getState().bindCoordinator(coordinator);
+
+// Production review (separate from the streaming practice path). It gets its own
+// WorkletCapture so review and practice never share a mic session; App switches
+// screens only after stopping the other's capture, so only one is ever live.
+const coach = new CoachClient();
+bindReview({
+  progress: createProgressClient(),
+  grade: (target, actual) => coach.gradeAttempt(target, actual),
+  transcribe: createTranscribeClient(),
+  capture: new WorkletCapture(),
+});
