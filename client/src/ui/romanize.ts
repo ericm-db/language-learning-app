@@ -1,9 +1,6 @@
-// Deterministic client-side romanization of Telugu script (telugu -> IAST)
-// via @indic-transliteration/sanscript. Never an LLM call: the latency budget
-// and reproducibility both require a pure local function.
+// Re-export of the deterministic Telugu->IAST romanizer, which now lives in
+// core/ so store/ and ui/ can both use it without crossing a layer boundary.
+// Kept here so existing ui/ imports (TranscriptPanes, ReviewScreen, ...) are
+// unchanged.
 
-import Sanscript from '@indic-transliteration/sanscript';
-
-export function romanize(teluguText: string): string {
-  return Sanscript.t(teluguText, 'telugu', 'iast');
-}
+export { romanize } from '../core/romanize';

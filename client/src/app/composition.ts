@@ -11,10 +11,12 @@ import { StreamingTranslationAdapter } from '../adapters/stream/StreamingTransla
 import { createTranslateClient } from '../adapters/http/translateClient';
 import { createTranscribeClient } from '../adapters/http/transcribeClient';
 import { createProgressClient } from '../adapters/http/progressClient';
+import { createTutorClient } from '../adapters/http/tutorClient';
 import { CoachClient } from '../adapters/http/CoachClient';
 import { initTokenPrefetch, tokenProvider } from '../adapters/http/tokenProvider';
 import { createDrillCoordinator } from '../core/coordinator/DrillCoordinator';
 import type { TranslationPort } from '../ports/TranslationPort';
+import { bindConversation } from '../store/conversationStore';
 import { useDrillStore } from '../store/drillStore';
 import { bindReview } from '../store/reviewStore';
 
@@ -70,4 +72,16 @@ bindReview({
   grade: (target, actual) => coach.gradeAttempt(target, actual),
   transcribe: createTranscribeClient(),
   capture: new WorkletCapture(),
+});
+
+// Conversation (the scaffolded chat with the Gemini tutor). It reuses the shared
+// `playback` singleton so we never create a second AudioContext, but gets its OWN
+// WorkletCapture so practice, review, and conversation never share a mic session;
+// App.switchScreen stops one before starting another, so only one is ever live.
+bindConversation({
+  tutor: createTutorClient(),
+  progress: createProgressClient(),
+  transcribe: createTranscribeClient(),
+  capture: new WorkletCapture(),
+  playback,
 });

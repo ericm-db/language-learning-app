@@ -67,5 +67,9 @@ export function createProgressClient(fetchFn: FetchFn = fetch): ProgressPort {
     async listSessions() {
       return (await get('/api/progress/sessions', 'listSessions')) as ProgressSession[];
     },
+    async conversationRung() {
+      const body = (await get('/api/progress/conversation-rung', 'conversationRung')) as { rung?: unknown };
+      return typeof body.rung === 'number' ? body.rung : 0;
+    },
   };
 }

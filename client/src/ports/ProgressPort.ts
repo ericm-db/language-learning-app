@@ -73,4 +73,6 @@ export interface ProgressPort {
   recordAttempt(attempt: AttemptInput): Promise<{ scaffoldRung: number | null }>;
   appendSession(session: Pick<ProgressSession, 'id' | 'mode' | 'direction'> & Partial<ProgressSession>): Promise<void>;
   listSessions(): Promise<ProgressSession[]>;
+  /** Global conversation scaffold rung, so a session seeds from prior progress. */
+  conversationRung(): Promise<number>;
 }

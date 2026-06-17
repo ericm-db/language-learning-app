@@ -345,6 +345,114 @@ button:disabled {
   line-height: 1.5;
 }
 
+/* Conversation: a chat-like transcript with a candidate scaffold that fades by
+   rung. Typography-led and ungamified — no points, streaks, or celebration. */
+.conversation {
+  max-width: 44rem;
+}
+
+.conv-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.conv-exchange {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.conv-tutor-te {
+  margin: 0;
+  font-weight: 600;
+}
+
+.conv-tutor-roman {
+  margin: 0;
+  color: var(--muted);
+}
+
+.conv-tutor-gloss {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9375rem;
+}
+
+.conv-learner {
+  margin: 0.25rem 0 0;
+}
+
+.conv-learner-label {
+  color: var(--muted);
+}
+
+.conv-feedback {
+  margin: 0.25rem 0 0;
+  font-size: 0.9375rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.conv-reply {
+  border-top: 1px solid var(--border);
+  padding-top: 1.5rem;
+}
+
+.conv-support {
+  margin: 0 0 1rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.conv-candidates {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.conv-candidate {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.conv-candidate-te {
+  font-size: 1.125rem;
+}
+
+.conv-candidate-roman {
+  font-weight: 500;
+}
+
+.conv-candidate-gloss {
+  color: var(--muted);
+  font-size: 0.9375rem;
+}
+
+.conv-hint {
+  margin: 0;
+  font-weight: 500;
+}
+
+.conv-hint-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+}
+
+.conv-free-note {
+  margin: 0 0 1rem;
+  color: var(--muted);
+}
+
 @media (max-width: 56rem) {
   .panes {
     grid-template-columns: 1fr;

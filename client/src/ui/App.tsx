@@ -2,13 +2,15 @@ import { useState, type ReactElement } from 'react';
 import type { AudioPlaybackPort } from '../ports/AudioPlaybackPort';
 import type { CoordinatorState } from '../core/coordinator/types';
 import type { TranslationDirection } from '../ports/types';
+import { useConversationStore } from '../store/conversationStore';
 import { useDrillStore } from '../store/drillStore';
 import { useReviewStore } from '../store/reviewStore';
+import { ConversationScreen } from './ConversationScreen';
 import { DebugPanel } from './DebugPanel';
 import { ReviewScreen } from './ReviewScreen';
 import { TranscriptPanes } from './TranscriptPanes';
 
-type Screen = 'practice' | 'review';
+type Screen = 'practice' | 'review' | 'converse';
 
 export interface AppProps {
   /** Injected by the composition root; resume() must run inside a user gesture. */
@@ -50,19 +52,33 @@ export function App({ playback }: AppProps): ReactElement {
 
   const offline = import.meta.env.VITE_TRANSLATION === 'fake';
 
-  // Only one screen may hold the mic at a time. Switching away from Practice
-  // closes any live streaming session; switching away from Review stops its
-  // capture. The user is on one screen at a time, so this is the only contention.
+  // Only one screen may hold the mic at a time. Leaving Practice closes any live
+  // streaming session; leaving Review stops its capture; leaving Converse stops
+  // the conversation capture (and playback). We tear down the screen we're
+  // leaving, then arm the one we're entering, so a single capture is ever live.
   const switchScreen = (target: Screen): void => {
     if (target === screen) return;
-    if (target === 'review') {
+
+    // Tear down the screen being left.
+    if (screen === 'practice') {
       void useDrillStore.getState().close();
-      setScreen('review');
-      void useReviewStore.getState().loadDue();
-    } else {
+    } else if (screen === 'review') {
       const review = useReviewStore.getState();
       if (review.status === 'recording') void review.stopAndGrade();
-      setScreen('practice');
+    } else if (screen === 'converse') {
+      void useConversationStore.getState().reset();
+    }
+
+    setScreen(target);
+
+    // Enter the screen being opened.
+    if (target === 'review') {
+      void useReviewStore.getState().loadDue();
+    } else if (target === 'converse') {
+      // resume() inside the click gesture below isn't needed here: start() calls
+      // playback.resume() before enqueueing, and this handler runs in the tab
+      // click, satisfying the autoplay user-gesture requirement.
+      void useConversationStore.getState().start();
     }
   };
 
@@ -120,10 +136,20 @@ export function App({ playback }: AppProps): ReactElement {
         >
           Review
         </button>
+        <button
+          type="button"
+          className={screen === 'converse' ? 'mode-tab mode-tab-active' : 'mode-tab'}
+          aria-pressed={screen === 'converse'}
+          onClick={() => switchScreen('converse')}
+        >
+          Converse
+        </button>
       </nav>
 
       {screen === 'review' ? (
         <ReviewScreen />
+      ) : screen === 'converse' ? (
+        <ConversationScreen />
       ) : (
         <PracticeScreen
           coordinatorState={coordinatorState}

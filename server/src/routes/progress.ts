@@ -150,6 +150,10 @@ export function createProgressRoutes(deps: ProgressRouteDeps): Hono {
 
   routes.get('/sessions', (c) => c.json(repo().listSessions()));
 
+  // Current global conversation scaffold rung, so a session seeds from prior
+  // progress instead of resetting to fully-scaffolded each time.
+  routes.get('/conversation-rung', (c) => c.json({ rung: repo().currentConversationRung() }));
+
   return routes;
 }
 
