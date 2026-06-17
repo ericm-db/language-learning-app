@@ -5,6 +5,7 @@
 // instrument that calibrates scaffold fading.
 
 import { DatabaseSync } from 'node:sqlite';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { ProgressRepo } from './progressRepo.js';
 
@@ -72,8 +73,9 @@ let cached: DatabaseSync | undefined;
 /** Opens (and migrates) the progress DB. DATA_DIR holds the file on a volume. */
 export function getDb(): DatabaseSync {
   if (cached) return cached;
-  const path = join(process.env.DATA_DIR ?? '.', 'progress.db');
-  const db = new DatabaseSync(path);
+  const dir = process.env.DATA_DIR ?? '.';
+  mkdirSync(dir, { recursive: true }); // create the data dir if absent (no-op on Fly's mount)
+  const db = new DatabaseSync(join(dir, 'progress.db'));
   migrate(db);
   cached = db;
   return cached;
