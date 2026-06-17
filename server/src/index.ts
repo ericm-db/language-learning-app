@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
+import { serveStatic } from '@hono/node-server/serve-static';
 import { WebSocketServer } from 'ws';
 import { assertGenAIConfiguredForProduction, getGenAI } from './lib/genai.js';
 import { assertCartesiaConfiguredForProduction, getCartesia } from './lib/cartesia.js';
@@ -41,6 +42,15 @@ if (process.env.NODE_ENV !== 'test') {
   } catch {
     // No key in dev: warming is skipped, requests still lazy-error as before.
   }
+
+  // Serve the built SPA (client/dist) so the whole app is one same-origin
+  // deployable on Fly. /api/* routes are registered first and take precedence;
+  // this only catches everything else. In dev the client is served by Vite, so
+  // client/dist may be absent here -- harmless. Root is cwd-relative (cwd=/app
+  // on Fly; the build copies client/dist to /app/client/dist).
+  app.use('/*', serveStatic({ root: './client/dist' }));
+  app.get('*', serveStatic({ path: 'index.html', root: './client/dist' }));
+
   const port = Number(process.env.PORT ?? 8787);
   const server = serve({ fetch: app.fetch, port }, (info) => {
     console.log(`telugu-practice server listening on :${info.port}`);

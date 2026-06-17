@@ -7,9 +7,6 @@ node_modules
 client/dist
 server/dist
 
-# The client SPA is not part of the server deployable.
-client
-
 # Vercel serverless entry (this image is the standalone node server).
 api
 vercel.json
