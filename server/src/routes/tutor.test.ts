@@ -67,6 +67,17 @@ describe('POST /api/tutor/turn', () => {
     expect((await post(app(stubModel(goodTurn), cartesia(Buffer.from([0]))), body)).status).toBe(400);
   });
 
+  it('returns learnerScore only when the last turn was the learner', async () => {
+    const scored = JSON.stringify({ ...JSON.parse(goodTurn), learnerScore: 75 });
+    const withReply = await post(app(stubModel(scored), cartesia(Buffer.from([0]))), {
+      history: [{ role: 'tutor', text: 'హాయ్' }, { role: 'learner', text: 'నేను బాగున్నాను' }],
+    });
+    expect((await withReply.json()) as { learnerScore: number }).toMatchObject({ learnerScore: 75 });
+    // No learner turn yet -> omitted even if the model returns one.
+    const noReply = await post(app(stubModel(scored), cartesia(Buffer.from([0]))), { history: [] });
+    expect(await noReply.json()).not.toHaveProperty('learnerScore');
+  });
+
   it('maps malformed model JSON to 502', async () => {
     expect((await post(app(stubModel('not json'), cartesia(Buffer.from([0]))), { history: [] })).status).toBe(502);
   });

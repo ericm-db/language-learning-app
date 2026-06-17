@@ -72,6 +72,43 @@ const ADVANCE_AFTER = 2;
 const SUCCESS_SCORE = 70;
 const RECENT_WINDOW = 6;
 
+interface RungRow {
+  scaffold_rung: number;
+  score: number;
+  used_candidate: number;
+}
+
+/**
+ * Adaptive scaffold rung from attempt history (oldest-first). Three signals,
+ * deliberately distinct (the calibration target, see docs/pedagogy.md):
+ *  - clean success (score>=SUCCESS_SCORE, candidate NOT leaned on): advance after
+ *    ADVANCE_AFTER in a row;
+ *  - failure (low score): drop a rung to re-scaffold;
+ *  - leaned on the offered candidate (decent score): neutral -- not mastery, but
+ *    not a failure, so hold the rung and reset the streak.
+ */
+function computeRung(recentOldestFirst: RungRow[]): number {
+  let rung = MIN_RUNG;
+  let streak = 0;
+  for (const r of recentOldestFirst) {
+    const failed = r.score < SUCCESS_SCORE;
+    const cleanSuccess = !failed && r.used_candidate === 0;
+    if (cleanSuccess && r.scaffold_rung >= rung) {
+      streak += 1;
+      if (streak >= ADVANCE_AFTER && rung < MAX_RUNG) {
+        rung += 1;
+        streak = 0;
+      }
+    } else if (failed) {
+      streak = 0;
+      if (rung > MIN_RUNG) rung -= 1;
+    } else {
+      streak = 0; // leaned on the candidate: hold, do not advance
+    }
+  }
+  return rung;
+}
+
 export class ProgressRepo {
   constructor(private readonly db: DatabaseSync) {}
 
@@ -155,24 +192,24 @@ export class ProgressRepo {
     const recent = (
       this.db
         .prepare('SELECT scaffold_rung, score, used_candidate FROM attempts WHERE phrase_id = ? ORDER BY created_at DESC LIMIT ?')
-        .all(phraseId, RECENT_WINDOW) as unknown as Array<{ scaffold_rung: number; score: number; used_candidate: number }>
+        .all(phraseId, RECENT_WINDOW) as unknown as RungRow[]
     ).reverse();
-    let rung = MIN_RUNG;
-    let streak = 0;
-    for (const r of recent) {
-      const success = r.score >= SUCCESS_SCORE && r.used_candidate === 0;
-      if (success && r.scaffold_rung >= rung) {
-        streak += 1;
-        if (streak >= ADVANCE_AFTER && rung < MAX_RUNG) {
-          rung += 1;
-          streak = 0;
-        }
-      } else if (!success) {
-        streak = 0;
-        if (rung > MIN_RUNG) rung -= 1; // drop back to re-scaffold on failure
-      }
-    }
-    return rung;
+    return computeRung(recent);
+  }
+
+  /**
+   * Global conversation scaffold rung, from recent conversation-mode attempts
+   * (regardless of phrase, since conversation content is always novel). Same
+   * advance/drop heuristic as per-phrase: a success is score >= SUCCESS_SCORE
+   * without leaning on the offered candidate.
+   */
+  currentConversationRung(): number {
+    const recent = (
+      this.db
+        .prepare("SELECT scaffold_rung, score, used_candidate FROM attempts WHERE mode = 'conversation' ORDER BY created_at DESC LIMIT ?")
+        .all(RECENT_WINDOW) as unknown as RungRow[]
+    ).reverse();
+    return computeRung(recent);
   }
 
   appendSession(s: Session): void {

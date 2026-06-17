@@ -46,6 +46,7 @@ const TURN_SCHEMA: Schema = {
       },
     },
     feedback: { type: Type.STRING, description: 'Optional one-line friendly note on the learner last reply; empty if none' },
+    learnerScore: { type: Type.INTEGER, description: 'Quality 0-100 of the learner last reply (intelligibility + appropriateness); 0 if there is no learner turn yet' },
   },
   required: ['tutorTelugu', 'tutorGloss', 'candidates'],
 };
@@ -84,6 +85,8 @@ function prompt(history: TurnMsg[]): string {
     'short), each as a candidate reply with its English meaning — these help a stuck beginner respond.',
     'If the learner\'s last reply had a clear mistake, add ONE short friendly note (a gentle recast);',
     'otherwise leave feedback empty. Do not lecture.',
+    'Also score the learner\'s LAST reply 0-100 on intelligibility and appropriateness as a Telugu',
+    'response (be encouraging but honest); use 0 if there is no learner turn yet.',
     '',
     'Conversation so far:',
     transcript,
@@ -127,6 +130,7 @@ export function createTutorRoute(deps: TutorRouteDeps): Hono {
     let tutorGloss: string;
     let candidates: Array<{ telugu: string; gloss: string }>;
     let feedback: string | undefined;
+    let learnerScore: number | undefined;
     try {
       const response = await model.models.generateContent({
         model: TUTOR_MODEL,
@@ -146,6 +150,9 @@ export function createTutorRoute(deps: TutorRouteDeps): Hono {
         .slice(0, 3)
         .map((x) => ({ telugu: x.telugu.trim(), gloss: x.gloss.trim() }));
       feedback = typeof parsed.feedback === 'string' && parsed.feedback.trim().length > 0 ? parsed.feedback.trim() : undefined;
+      if (typeof parsed.learnerScore === 'number' && Number.isFinite(parsed.learnerScore)) {
+        learnerScore = Math.max(0, Math.min(100, Math.round(parsed.learnerScore)));
+      }
     } catch {
       return c.json(upstreamError, 502);
     }
@@ -158,10 +165,13 @@ export function createTutorRoute(deps: TutorRouteDeps): Hono {
       audioBase64 = '';
     }
 
+    // learnerScore only meaningful when the learner has just spoken.
+    const lastWasLearner = history.length > 0 && history[history.length - 1]?.role === 'learner';
     return c.json({
       tutor: { telugu: tutorTelugu, gloss: tutorGloss, audioBase64, outputSampleRate: OUTPUT_SAMPLE_RATE },
       candidates,
       ...(feedback === undefined ? {} : { feedback }),
+      ...(lastWasLearner && learnerScore !== undefined ? { learnerScore } : {}),
     });
   });
 

@@ -25,7 +25,7 @@ function phrase(id: string, overrides: Partial<Phrase> = {}): Phrase {
   };
 }
 
-function attempt(phraseId: string, overrides: Partial<Attempt> = {}): Attempt {
+function attempt(phraseId: string | null, overrides: Partial<Attempt> = {}): Attempt {
   return {
     id: `a-${Math.round(overrides.createdAt ?? 0)}-${overrides.scaffoldRung ?? 0}-${overrides.score ?? 0}`,
     phraseId,
@@ -101,6 +101,16 @@ describe('ProgressRepo', () => {
     r.recordAttempt(attempt('p1', { createdAt: 2, scaffoldRung: 0, score: 90 })); // -> rung 1
     r.recordAttempt(attempt('p1', { createdAt: 3, scaffoldRung: 1, score: 30 })); // fail -> drop
     expect(r.currentScaffoldRung('p1')).toBe(0);
+  });
+
+  it('computes a global conversation rung from conversation attempts (no phrase needed)', () => {
+    // Two clean unscaffolded successes in conversation -> rung advances to 1.
+    r.recordAttempt(attempt(null, { createdAt: 1, mode: 'conversation', scaffoldRung: 0, score: 90, usedCandidate: false }));
+    r.recordAttempt(attempt(null, { createdAt: 2, mode: 'conversation', scaffoldRung: 0, score: 88, usedCandidate: false }));
+    expect(r.currentConversationRung()).toBe(1);
+    // Leaning on a candidate is not mastery -> no advance.
+    r.recordAttempt(attempt(null, { createdAt: 3, mode: 'conversation', scaffoldRung: 1, score: 95, usedCandidate: true }));
+    expect(r.currentConversationRung()).toBe(1);
   });
 
   it('logs sessions and updates them on conflict', () => {

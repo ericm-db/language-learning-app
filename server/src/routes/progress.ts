@@ -120,7 +120,9 @@ export function createProgressRoutes(deps: ProgressRouteDeps): Hono {
     const r = repo();
     const phraseId = str(body.phraseId, 128) ? body.phraseId : null;
     recordAttempt(r, body, Math.max(0, Math.min(100, Math.round(body.score))), 'conversation');
-    return c.json({ scaffoldRung: phraseId ? r.currentScaffoldRung(phraseId) : null });
+    // Per-phrase rung when tied to a phrase; otherwise the global conversation
+    // rung (conversation candidates are novel, so fading is tracked globally).
+    return c.json({ scaffoldRung: phraseId ? r.currentScaffoldRung(phraseId) : r.currentConversationRung() });
   });
 
   routes.post('/sessions', async (c) => {
