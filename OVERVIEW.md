@@ -1,10 +1,20 @@
 # Overview
 
 A spoken-Telugu practice tool for an adult **near-beginner** whose goal is everyday
-conversation. It does three things: real-time speech **translation**, **spaced review** of
-phrases you've worked on, and a **scaffolded conversation** with an AI tutor that teaches
-you new vocabulary as you talk. It is deliberately **not gamified** — no streaks, XP, or
-badges — and uses **no fixed scenarios**; conversation content is generated live.
+conversation. Five tabs, each tied to second-language-acquisition evidence (`docs/pedagogy.md`):
+- **Learn** (the daily core) — a chunk-driven loop: hear a high-frequency colloquial chunk →
+  say a one-slot substitution aloud → recast + optional "why" → it enters spaced review.
+- **Listen** — shadowing: hear a short chunk, **type what you think it means** (graded, tracked),
+  then repeat it aloud for pronunciation.
+- **Review** — spaced retrieval: flashcard (flip + self-rate) or speak (production recall), FSRS.
+- **Converse** (the centerpiece) — a scaffolded, unscripted AI-tutor conversation that teaches
+  new vocab as you talk and recaps your hiccups at the end.
+- **Practice** — the original real-time speech-translation drill, now demoted (pedagogically weak).
+
+It is deliberately **not gamified** — no streaks, XP, or badges — and uses **no fixed
+scenarios**; content is generated live. New words from any tab flow into one shared review deck
+via a single **new-words engine** (`client/src/store/vocabEngine.ts`). The Learn/Listen design
+is grounded in a verified SLA research pass — see `docs/pedagogy.md`.
 
 This document is the narrative and the decisions. For specifics see:
 - `README.md` — how to run and deploy.
@@ -101,15 +111,42 @@ A 107-agent deep-research pass (peer-reviewed, adversarially verified; synthesiz
   retention timescale. Honest caveat: this is research-*informed*, not proven for spoken
   conversation, so the `attempts` table is built as the **instrument to calibrate it from real data**.
 
-Modes:
-- **Production review** — English prompt → you say the Telugu → transcribed, graded against
-  the target, FSRS-scheduled (`ts-fsrs`, server-side).
-- **Scaffolded conversation** (the centerpiece) — a dynamic Gemini tutor that responds to what
+Modes (server routes in parentheses):
+- **Learn** (`/api/learn/next`) — hear a high-frequency colloquial **chunk** → say a one-slot
+  **substitution** aloud (warm mic, VAD auto-submit) → **recast** + optional light "why" → the
+  chunk enters the FSRS deck. The research-backed daily core (input + light pushed output +
+  recast + spacing); replaces the translation drill, which the evidence flags as an anti-pattern.
+- **Listen / shadowing** (`/api/listen/next`, `/api/listen/check`) — hear a short chunk, **type
+  what you think it means** (semantically graded → session counter + FSRS), then **shadow** it
+  (repeat aloud) for pronunciation. Shadowing helps low-level learners' comprehension *and*
+  pronunciation; honest ceiling: it builds receptive + pronunciation skill, not free speech.
+- **Production review** — English prompt → flashcard (flip + self-rate **Again/Okay/Good**) or
+  **speak** the Telugu (transcribed, model-graded as feedback; the self-rating drives FSRS).
+  Speak uses VAD auto-submit; never dead-ends (study due cards OR the whole deck).
+- **Scaffolded conversation** (`/api/tutor/turn`, `/api/tutor/summary`) — a dynamic Gemini tutor that responds to what
   you say (no scripts), offers romanized candidate replies that **fade per your attempt
-  history** (full → no-gloss → first-word hint → none), runs **hands-free** (VAD auto-submit)
-  or **tap-to-stop**, and **teaches new vocabulary progressively**: it's told what you already
-  know, introduces 1–2 new words/verbs per turn in context, and **saves them to your review
-  deck** — so conversation grows your vocabulary and fills Review.
+  history** (full → no-gloss → first-word hint → none; fading is deliberately conservative so a
+  beginner keeps support until it's earned), runs **hands-free** (VAD auto-submit, a top-level
+  toggle) or **tap-to-stop**, and **teaches new vocabulary progressively**: it's told what you
+  already know, introduces 1–2 new words/verbs per turn in context, and **saves them to your
+  review deck** — so conversation grows your vocabulary and fills Review. The UI is a
+  ChatGPT-style chat (assistant/user bubbles, a self-scrolling message list, a pinned composer).
+  - **Latency — speculative prefetch.** The dominant per-turn cost is the tutor round-trip
+    (Gemini turn + Cartesia TTS). Since the tutor already proposes the 2–3 things you're likely
+    to say, the client **speculatively generates the tutor's reply to each candidate the moment
+    a turn is shown** — while the tutor is still speaking and you're thinking. When your reply
+    matches a candidate, that turn (text *and* already-synthesized audio) is served from cache
+    with no model round-trip, leaving only STT on the hot path. The prefetch **rolls forward**
+    each turn, so the path stays continuously warm; it's bounded to the shown candidates and can
+    be disabled to conserve quota.
+  - **Other Converse affordances:** the "You said" bubble shows the **English meaning** of your
+    transcribed reply (so you can tell if the STT misheard); **"Fix it"** lets you type what you
+    meant (it rewinds, drops the off-track turn, regenerates — and suppresses the VAD while you
+    type); **End** produces an **end-of-conversation recap** (`/api/tutor/summary`) of your main
+    hiccups + better phrasings + a light "why"; and it does **not** auto-start (explicit Start).
+  - **Warm mic.** `WorkletCapture` keeps the AudioContext + mic stream alive across the per-turn
+    start/stop (released after ~20s idle), so the mic is hot the instant your turn comes — no
+    first-word clipping. Shared by every mic surface (Learn/Listen/Review/Converse/Practice).
 
 ### Progress DB
 
@@ -160,6 +197,8 @@ Four tables, **no points/streaks table** — progress is computed, not gamified:
   to calibrate them from real use.
 - **Cartesia TTS rate-limits** intermittently under heavy use; tutor audio is best-effort
   (text/candidates still work if a clip drops).
-- Latency numbers from synthesized test audio; real-mic feel (and the VAD silence threshold)
-  is the remaining tuning surface.
+- Latency numbers from synthesized test audio; real-mic feel (and the VAD silence threshold,
+  raised to 1.2s so a beginner isn't cut off mid-thought) is the remaining tuning surface. The
+  speculative prefetch makes an on-candidate reply near-instant; an off-script reply still pays
+  the full round-trip.
 - Single Fly machine in one region; fine for one user, `fly scale` for more.

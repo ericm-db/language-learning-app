@@ -4,18 +4,21 @@ import type { AudioPlaybackPort } from '../ports/AudioPlaybackPort';
 import type { ProgressPort } from '../ports/ProgressPort';
 import type { PcmChunk } from '../ports/types';
 import {
+  bestCandidateMatch,
   bindConversation,
   useConversationStore,
+  type CandidateView,
   type ConversationDeps,
+  type SummaryFn,
   type TranscribeFn,
   type TutorFn,
   type TutorTurn,
 } from './conversationStore';
 
 // VAD-shaped frames at 16k: ~100ms chunks (1600 samples). Speech is well above
-// the 0.012 energy threshold; silence is zeros. The default endpointer needs
-// >=300ms speech then >=700ms trailing silence to fire an utterance, so 4 speech
-// + 8 silence chunks comfortably trips it.
+// the 0.012 energy threshold; silence is zeros. The conversation endpointer needs
+// >=300ms speech then >=CONV_SILENCE_MS (1200ms) trailing silence to fire, so
+// 4 speech + 14 silence chunks (1400ms) comfortably trips it.
 const FRAME = 1600;
 function speechFrame(): Int16Array {
   return new Int16Array(FRAME).fill(Math.round(0.2 * 32768));
@@ -26,7 +29,7 @@ function silenceFrame(): Int16Array {
 function speechThenSilence(): Int16Array[] {
   const out: Int16Array[] = [];
   for (let i = 0; i < 4; i += 1) out.push(speechFrame());
-  for (let i = 0; i < 8; i += 1) out.push(silenceFrame());
+  for (let i = 0; i < 14; i += 1) out.push(silenceFrame());
   return out;
 }
 
@@ -143,6 +146,8 @@ function turn(overrides: Partial<TutorTurn> = {}): TutorTurn {
 
 interface Bound {
   tutor: ReturnType<typeof vi.fn>;
+  synthesize: ReturnType<typeof vi.fn>;
+  summarize: ReturnType<typeof vi.fn>;
   recordAttempt: ReturnType<typeof vi.fn>;
   conversationRung: ReturnType<typeof vi.fn>;
   savePhrase: ReturnType<typeof vi.fn>;
@@ -166,6 +171,9 @@ function bind(overrides: {
   captureChunks?: Int16Array[];
   knownPhrases?: string[];
   savePhraseReject?: boolean;
+  prefetch?: boolean;
+  synthesizeAudio?: string;
+  summary?: { hiccups: Array<{ youSaid: string; better: string; note?: string }>; encouragement?: string };
 }): Bound {
   const turns = overrides.tutorTurns ?? [turn(), turn()];
   let i = 0;
@@ -175,10 +183,17 @@ function bind(overrides: {
     i += 1;
     return t as TutorTurn;
   });
+  const synthesize = vi.fn(async () => ({
+    audioBase64: overrides.synthesizeAudio ?? AUDIO_B64,
+    outputSampleRate: 24000,
+  }));
   const transcribe = vi.fn<TranscribeFn>(async () => {
     if (overrides.transcribeReject) throw overrides.transcribeReject;
     return overrides.transcript ?? 'నేను బాగున్నాను';
   });
+  const summarize = vi.fn<SummaryFn>(async () =>
+    overrides.summary ?? { hiccups: [{ youSaid: 'నేను బాగుంది', better: 'నేను బాగున్నాను', note: 'verb ending' }], encouragement: 'Nice!' },
+  );
   const progress = fakeProgress({
     rung: overrides.rung ?? 0,
     scaffoldRung: overrides.scaffoldRung ?? null,
@@ -189,14 +204,21 @@ function bind(overrides: {
   const cap = fakeCapture(overrides.captureChunks ?? speechThenSilence());
   const deps: ConversationDeps = {
     tutor: tutor as unknown as TutorFn,
+    synthesize,
+    summarize: summarize as unknown as SummaryFn,
     progress,
     transcribe: transcribe as unknown as TranscribeFn,
     capture: cap.port,
     playback,
+    // Off by default so these tests assert the turn logic without speculative
+    // calls perturbing call counts/order; the prefetch suite opts back in.
+    prefetch: overrides.prefetch ?? false,
   };
   bindConversation(deps);
   return {
     tutor,
+    synthesize,
+    summarize,
     recordAttempt: progress.recordAttempt,
     conversationRung: progress.conversationRung,
     savePhrase: progress.savePhrase,
@@ -230,6 +252,9 @@ beforeEach(() => {
     rung: 0,
     lastNewVocab: [],
     inputMode: 'handsfree',
+    prefetchMode: 'balanced',
+    isCorrecting: false,
+    summary: null,
     lastFeedback: undefined,
     error: undefined,
   });
@@ -546,5 +571,302 @@ describe('conversationStore (input mode)', () => {
 
     useConversationStore.getState().setInputMode('handsfree');
     expect(localStorage.getItem('conversation.inputMode')).toBe('handsfree');
+  });
+});
+
+describe('bestCandidateMatch (fuzzy candidate matching)', () => {
+  const cands: CandidateView[] = [
+    { telugu: 'నేను బాగున్నాను', romanization: 'nēnu bāgunnānu', gloss: 'I am fine' },
+    { telugu: 'పర్వాలేదు', romanization: 'parvālēdu', gloss: 'Not bad' },
+  ];
+
+  it('matches an exact reply', () => {
+    expect(bestCandidateMatch('నేను బాగున్నాను', cands)?.telugu).toBe('నేను బాగున్నాను');
+  });
+
+  it('matches when the learner adds filler words around the candidate (containment)', () => {
+    expect(bestCandidateMatch('అవును నేను బాగున్నాను అండి', cands)?.telugu).toBe('నేను బాగున్నాను');
+  });
+
+  it('matches reordered words via token overlap (not containment)', () => {
+    // Same two words, swapped order: neither string contains the other, so this
+    // exercises the Dice token-overlap path rather than the containment fast-path.
+    expect(bestCandidateMatch('బాగున్నాను నేను', cands)?.telugu).toBe('నేను బాగున్నాను');
+  });
+
+  it('does not match an unrelated reply (falls through to a live call)', () => {
+    expect(bestCandidateMatch('ఏదో పూర్తిగా వేరే విషయం', cands)).toBeNull();
+  });
+
+  it('returns null for an empty transcript', () => {
+    expect(bestCandidateMatch('', cands)).toBeNull();
+  });
+});
+
+describe('conversationStore (end-of-conversation summary)', () => {
+  it('finish() after a reply summarizes the hiccups (romanized) and shows the recap', async () => {
+    const b = bind({ summary: { hiccups: [{ youSaid: 'నేను బాగుంది', better: 'నేను బాగున్నాను', note: 'verb ending' }], encouragement: 'Well done!' } });
+    await useConversationStore.getState().start();
+    b.fireDrained();
+    await flushAsync();
+    await flushAsync(); // a learner reply now exists in history
+
+    await useConversationStore.getState().finish();
+
+    expect(b.summarize).toHaveBeenCalledTimes(1);
+    const s = useConversationStore.getState();
+    expect(s.status).toBe('summary');
+    expect(s.summary?.hiccups).toHaveLength(1);
+    expect(s.summary?.hiccups[0]?.better).toBe('నేను బాగున్నాను');
+    expect(s.summary?.hiccups[0]?.betterRoman.length).toBeGreaterThan(0); // client-romanized
+    expect(s.summary?.encouragement).toBe('Well done!');
+  });
+
+  it('finish() with no learner turn just resets (nothing to recap)', async () => {
+    const b = bind({ rung: 0 });
+    await useConversationStore.getState().start(); // only the opening tutor turn
+    await useConversationStore.getState().finish();
+    expect(b.summarize).not.toHaveBeenCalled();
+    expect(useConversationStore.getState().status).toBe('idle');
+  });
+});
+
+describe('conversationStore (correct last reply)', () => {
+  it('rewinds to the corrected reply, drops the off-track tutor turn, and regenerates', async () => {
+    const b = bind({ tutorTurns: [turn(), turn()], transcript: 'మంచిది' });
+    await useConversationStore.getState().start();
+    b.fireDrained();
+    await flushAsync();
+    await flushAsync();
+    // VAD auto-submitted the (misheard) reply -> turn 2 shown.
+    expect(b.tutor).toHaveBeenCalledTimes(2);
+    expect(useConversationStore.getState().turns[0]?.learnerReply).toBe('మంచిది');
+
+    await useConversationStore.getState().correctLastReply('I meant: I am good');
+    await flushAsync();
+
+    // A third tutor call carrying the corrected history (ending in the correction),
+    // with the off-track turn dropped.
+    expect(b.tutor).toHaveBeenCalledTimes(3);
+    const correctedHistory = b.tutor.mock.calls[2]?.[0];
+    expect(correctedHistory?.[correctedHistory.length - 1]).toEqual({ role: 'learner', text: 'I meant: I am good' });
+    const s = useConversationStore.getState();
+    expect(s.turns[0]?.learnerReply).toBe('I meant: I am good');
+    expect(s.turns).toHaveLength(2); // corrected exchange + regenerated tutor turn
+  });
+
+  it('is a no-op when there is no reply yet to correct', async () => {
+    const b = bind({ rung: 0 });
+    await useConversationStore.getState().start(); // only the opening tutor turn, no reply
+    expect(b.tutor).toHaveBeenCalledTimes(1);
+    await useConversationStore.getState().correctLastReply('something');
+    expect(b.tutor).toHaveBeenCalledTimes(1); // nothing regenerated
+  });
+
+  it('beginCorrection arms the VAD-suppression flag only with a reply present; cancel clears it', () => {
+    bind({ rung: 0 });
+    // No reply yet -> no-op (nothing to correct).
+    useConversationStore.getState().beginCorrection();
+    expect(useConversationStore.getState().isCorrecting).toBe(false);
+
+    // A reply exists and we're listening -> arming holds the mic for the editor.
+    useConversationStore.setState({
+      status: 'listening',
+      turns: [{ tutor: { telugu: 'మీరు ఎలా ఉన్నారు?', romanization: 'mīru elā unnāru?', gloss: 'How are you?' }, learnerReply: 'x' }],
+    });
+    useConversationStore.getState().beginCorrection();
+    expect(useConversationStore.getState().isCorrecting).toBe(true);
+
+    useConversationStore.getState().cancelCorrection();
+    expect(useConversationStore.getState().isCorrecting).toBe(false);
+  });
+});
+
+describe('conversationStore (opening-turn warmup)', () => {
+  it('prewarmOpening fetches the opening turn; start() then reuses it without a second tutor call', async () => {
+    const b = bind({ rung: 1, knownPhrases: ['నేను'] });
+    await useConversationStore.getState().prewarmOpening();
+
+    // The warmup fetched rung + vocab + the opening tutor turn.
+    expect(b.conversationRung).toHaveBeenCalledTimes(1);
+    expect(b.listPhrases).toHaveBeenCalledTimes(1);
+    expect(b.tutor).toHaveBeenCalledTimes(1);
+
+    await useConversationStore.getState().start();
+
+    // start() consumed the warmed turn — no extra tutor/rung/phrases calls.
+    expect(b.tutor).toHaveBeenCalledTimes(1);
+    expect(b.conversationRung).toHaveBeenCalledTimes(1);
+    expect(b.listPhrases).toHaveBeenCalledTimes(1);
+    const s = useConversationStore.getState();
+    expect(s.status).toBe('tutorSpeaking');
+    expect(s.rung).toBe(1);
+    expect(s.turns).toHaveLength(1);
+  });
+
+  it('start() fetches live when nothing was prewarmed', async () => {
+    const b = bind({ rung: 0 });
+    await useConversationStore.getState().start();
+    expect(b.tutor).toHaveBeenCalledTimes(1);
+    expect(useConversationStore.getState().status).toBe('tutorSpeaking');
+  });
+
+  it('reset() invalidates a prewarmed turn so the next start fetches fresh', async () => {
+    const b = bind({ rung: 0 });
+    await useConversationStore.getState().prewarmOpening();
+    expect(b.tutor).toHaveBeenCalledTimes(1);
+
+    await useConversationStore.getState().reset();
+    await useConversationStore.getState().start();
+
+    // The prewarmed turn was dropped on reset -> start fetched again.
+    expect(b.tutor).toHaveBeenCalledTimes(2);
+    expect(useConversationStore.getState().status).toBe('tutorSpeaking');
+  });
+
+  it('prewarmOpening is a no-op once already warmed or while a conversation is active', async () => {
+    const b = bind({ rung: 0 });
+    await useConversationStore.getState().prewarmOpening();
+    await useConversationStore.getState().prewarmOpening(); // already warmed
+    expect(b.tutor).toHaveBeenCalledTimes(1);
+
+    await useConversationStore.getState().start(); // status -> tutorSpeaking
+    await useConversationStore.getState().prewarmOpening(); // not idle -> no-op
+    expect(b.tutor).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('conversationStore (speculative prefetch)', () => {
+  it('start() fires a speculative tutor turn for each shown candidate', async () => {
+    const b = bind({ prefetch: true, rung: 0 });
+    await useConversationStore.getState().start();
+    await flushAsync();
+
+    // 1 real opening call + 1 per candidate (the default turn has 2 candidates).
+    expect(b.tutor).toHaveBeenCalledTimes(3);
+    // The speculative calls carry the candidate as a hypothetical learner reply.
+    const speculativeHistories = b.tutor.mock.calls.slice(1).map((c) => c[0]);
+    const lastLearnerTexts = speculativeHistories.map((h) => h[h.length - 1]?.text);
+    expect(lastLearnerTexts).toContain('నేను బాగున్నాను');
+    expect(lastLearnerTexts).toContain('పర్వాలేదు');
+  });
+
+  it('fires no speculative turns when prefetch mode is off (only the real opening call)', async () => {
+    const b = bind({ prefetch: true, rung: 0 });
+    useConversationStore.getState().setPrefetchMode('off');
+    await useConversationStore.getState().start();
+    await flushAsync();
+
+    // Just the real opening call — no per-candidate speculation, so no discarded TTS.
+    expect(b.tutor).toHaveBeenCalledTimes(1);
+    expect(b.synthesize).not.toHaveBeenCalled();
+  });
+
+  it('balanced: a served prefetch turn voices its audio at serve time (deferred TTS)', async () => {
+    // The speculative (skipAudio) turn comes back text-only; the served turn must
+    // be voiced lazily via synthesize, so unused speculations cost no TTS.
+    const tutor = vi.fn<TutorFn>(async (history, _known, opts) => {
+      const last = history[history.length - 1];
+      if (opts?.skipAudio === true && last?.role === 'learner' && last.text === 'నేను బాగున్నాను') {
+        return turn({
+          tutor: { telugu: 'FROM_PREFETCH', gloss: 'g', audioBase64: '', outputSampleRate: 24000 },
+          candidates: [],
+        });
+      }
+      return turn(); // opening (and any live fallback) is voiced inline
+    });
+    const synthesize = vi.fn(async () => ({ audioBase64: AUDIO_B64, outputSampleRate: 24000 }));
+    const progress = fakeProgress({ rung: 0, scaffoldRung: null });
+    const playback = fakePlayback();
+    const cap = fakeCapture(speechThenSilence());
+    bindConversation({
+      tutor: tutor as unknown as TutorFn,
+      synthesize,
+      summarize: (async () => ({ hiccups: [] })) as unknown as SummaryFn,
+      progress,
+      transcribe: (async () => 'నేను బాగున్నాను') as unknown as TranscribeFn,
+      capture: cap.port,
+      playback,
+      prefetch: true,
+    });
+    useConversationStore.getState().setPrefetchMode('balanced');
+
+    await useConversationStore.getState().start();
+    await flushAsync();
+    // Speculations are text-only so nothing is voiced yet.
+    expect(synthesize).not.toHaveBeenCalled();
+
+    playback.fireDrained();
+    await flushAsync();
+    await flushAsync();
+
+    // The matched candidate's deferred turn is voiced exactly once, at serve time.
+    expect(synthesize).toHaveBeenCalledTimes(1);
+    expect(synthesize).toHaveBeenCalledWith('FROM_PREFETCH');
+    expect(useConversationStore.getState().turns[1]?.tutor.telugu).toBe('FROM_PREFETCH');
+  });
+
+  it('serves the prefetched turn when the reply matches a candidate — no extra live call', async () => {
+    // The speculation for the matched candidate returns a distinctly-labelled
+    // turn with NO candidates (so the post-serve roll-forward fires nothing and
+    // the call count stays deterministic). It carries audio so the mic does not
+    // immediately reopen and auto-submit a follow-up turn.
+    const tutor = vi.fn<TutorFn>(async (history) => {
+      const last = history[history.length - 1];
+      if (last?.role === 'learner' && last.text === 'నేను బాగున్నాను') {
+        return turn({
+          tutor: { telugu: 'FROM_PREFETCH', gloss: 'g', audioBase64: AUDIO_B64, outputSampleRate: 24000 },
+          candidates: [],
+        });
+      }
+      return turn();
+    });
+    const progress = fakeProgress({ rung: 0, scaffoldRung: null });
+    const playback = fakePlayback();
+    const cap = fakeCapture(speechThenSilence());
+    bindConversation({
+      tutor: tutor as unknown as TutorFn,
+      summarize: (async () => ({ hiccups: [] })) as unknown as SummaryFn,
+      progress,
+      transcribe: (async () => 'నేను బాగున్నాను') as unknown as TranscribeFn,
+      capture: cap.port,
+      playback,
+      prefetch: true,
+    });
+
+    await useConversationStore.getState().start();
+    await flushAsync();
+    // Opening (1) + 2 speculations.
+    expect(tutor).toHaveBeenCalledTimes(3);
+
+    playback.fireDrained();
+    await flushAsync();
+    await flushAsync();
+
+    // The reply matched the first candidate -> submit served the prefetched turn
+    // and made NO additional live call (still 3 total; the served turn has no
+    // candidates so nothing rolls forward). The next tutor shown is the one the
+    // speculation produced.
+    expect(tutor).toHaveBeenCalledTimes(3);
+    const s = useConversationStore.getState();
+    expect(s.turns[1]?.tutor.telugu).toBe('FROM_PREFETCH');
+  });
+
+  it('falls back to a live call when the reply matches no prefetched candidate', async () => {
+    // The next turn has no candidates so nothing rolls forward after the serve,
+    // keeping the call count deterministic.
+    const b = bind({ prefetch: true, tutorTurns: [turn(), turn({ candidates: [] })], transcript: 'ఏదో కొత్త మాట' });
+    await useConversationStore.getState().start();
+    await flushAsync();
+    const callsAfterStart = b.tutor.mock.calls.length; // 1 real + 2 speculative
+    expect(callsAfterStart).toBe(3);
+
+    b.fireDrained();
+    await flushAsync();
+    await flushAsync();
+
+    // No prefetch matched the off-script reply -> exactly one extra live call.
+    expect(b.tutor.mock.calls.length).toBe(callsAfterStart + 1);
+    expect(useConversationStore.getState().turns).toHaveLength(2);
   });
 });

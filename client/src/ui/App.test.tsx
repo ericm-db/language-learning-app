@@ -61,11 +61,21 @@ afterEach(() => {
   container.remove();
 });
 
+// The first tab is now "Learn"; the streaming translation drill lives under the
+// "Practice" tab. Render the app and switch to Practice before asserting on it.
+function renderOnPractice(): void {
+  act(() => {
+    root.render(<App playback={playbackStub} />);
+  });
+  const practiceTab = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Practice');
+  act(() => {
+    practiceTab!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
 describe('App', () => {
   it('renders the session state label, controls, and transcripts', () => {
-    act(() => {
-      root.render(<App playback={playbackStub} />);
-    });
+    renderOnPractice();
 
     const text = container.textContent ?? '';
     expect(text).toContain('Telugu Practice');
@@ -84,9 +94,7 @@ describe('App', () => {
   });
 
   it('toggles the debug panel with metric percentiles labeled in ms', () => {
-    act(() => {
-      root.render(<App playback={playbackStub} />);
-    });
+    renderOnPractice();
     expect(container.textContent).not.toContain('t_first_audio');
 
     const toggle = Array.from(container.querySelectorAll('button')).find(
@@ -107,9 +115,7 @@ describe('App', () => {
 
   it('shows lastError when present', () => {
     useDrillStore.setState({ lastError: 'token mint failed' });
-    act(() => {
-      root.render(<App playback={playbackStub} />);
-    });
+    renderOnPractice();
     expect(container.textContent).toContain('token mint failed');
   });
 });

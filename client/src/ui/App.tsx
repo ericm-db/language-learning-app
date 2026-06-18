@@ -4,13 +4,20 @@ import type { CoordinatorState } from '../core/coordinator/types';
 import type { TranslationDirection } from '../ports/types';
 import { useConversationStore } from '../store/conversationStore';
 import { useDrillStore } from '../store/drillStore';
+import { useLearnStore } from '../store/learnStore';
+import { useListenStore } from '../store/listenStore';
 import { useReviewStore } from '../store/reviewStore';
 import { ConversationScreen } from './ConversationScreen';
 import { DebugPanel } from './DebugPanel';
+import { LearnScreen } from './LearnScreen';
+import { ListenScreen } from './ListenScreen';
 import { ReviewScreen } from './ReviewScreen';
 import { TranscriptPanes } from './TranscriptPanes';
 
-type Screen = 'practice' | 'review' | 'converse';
+// 'learn' is the research-backed first tab (chunk-driven input->output loop);
+// 'listen' is shadowing (receptive + pronunciation). 'practice' (the streaming
+// translation drill) is kept as a secondary tab.
+type Screen = 'learn' | 'listen' | 'practice' | 'review' | 'converse';
 
 export interface AppProps {
   /** Injected by the composition root; resume() must run inside a user gesture. */
@@ -48,7 +55,7 @@ export function App({ playback }: AppProps): ReactElement {
     return samples.length > 0 ? samples[samples.length - 1] ?? null : null;
   });
   const [debugOpen, setDebugOpen] = useState(false);
-  const [screen, setScreen] = useState<Screen>('practice');
+  const [screen, setScreen] = useState<Screen>('learn');
 
   const offline = import.meta.env.VITE_TRANSLATION === 'fake';
 
@@ -62,6 +69,10 @@ export function App({ playback }: AppProps): ReactElement {
     // Tear down the screen being left.
     if (screen === 'practice') {
       void useDrillStore.getState().close();
+    } else if (screen === 'learn') {
+      void useLearnStore.getState().reset();
+    } else if (screen === 'listen') {
+      void useListenStore.getState().reset();
     } else if (screen === 'review') {
       const review = useReviewStore.getState();
       if (review.status === 'recording') void review.stopAndGrade();
@@ -71,14 +82,12 @@ export function App({ playback }: AppProps): ReactElement {
 
     setScreen(target);
 
-    // Enter the screen being opened.
+    // Enter the screen being opened. Conversation does NOT auto-start — the
+    // learner taps "Start conversation" (the opening turn is prewarmed on tab
+    // hover, so that tap is near-instant), which also gives the clean user
+    // gesture the AudioContext needs.
     if (target === 'review') {
       void useReviewStore.getState().loadDue();
-    } else if (target === 'converse') {
-      // resume() inside the click gesture below isn't needed here: start() calls
-      // playback.resume() before enqueueing, and this handler runs in the tab
-      // click, satisfying the autoplay user-gesture requirement.
-      void useConversationStore.getState().start();
     }
   };
 
@@ -122,11 +131,19 @@ export function App({ playback }: AppProps): ReactElement {
       <nav className="mode-tabs" aria-label="Mode">
         <button
           type="button"
-          className={screen === 'practice' ? 'mode-tab mode-tab-active' : 'mode-tab'}
-          aria-pressed={screen === 'practice'}
-          onClick={() => switchScreen('practice')}
+          className={screen === 'learn' ? 'mode-tab mode-tab-active' : 'mode-tab'}
+          aria-pressed={screen === 'learn'}
+          onClick={() => switchScreen('learn')}
         >
-          Practice
+          Learn
+        </button>
+        <button
+          type="button"
+          className={screen === 'listen' ? 'mode-tab mode-tab-active' : 'mode-tab'}
+          aria-pressed={screen === 'listen'}
+          onClick={() => switchScreen('listen')}
+        >
+          Listen
         </button>
         <button
           type="button"
@@ -141,12 +158,28 @@ export function App({ playback }: AppProps): ReactElement {
           className={screen === 'converse' ? 'mode-tab mode-tab-active' : 'mode-tab'}
           aria-pressed={screen === 'converse'}
           onClick={() => switchScreen('converse')}
+          // Warm the opening turn on intent (hover/focus) so entering Converse is
+          // near-instant — the first turn has no candidate prefetch to lean on.
+          onPointerEnter={() => void useConversationStore.getState().prewarmOpening()}
+          onFocus={() => void useConversationStore.getState().prewarmOpening()}
         >
           Converse
         </button>
+        <button
+          type="button"
+          className={screen === 'practice' ? 'mode-tab mode-tab-active' : 'mode-tab'}
+          aria-pressed={screen === 'practice'}
+          onClick={() => switchScreen('practice')}
+        >
+          Practice
+        </button>
       </nav>
 
-      {screen === 'review' ? (
+      {screen === 'learn' ? (
+        <LearnScreen />
+      ) : screen === 'listen' ? (
+        <ListenScreen />
+      ) : screen === 'review' ? (
         <ReviewScreen />
       ) : screen === 'converse' ? (
         <ConversationScreen />

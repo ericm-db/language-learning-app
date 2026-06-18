@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createTutorClient, TutorApiError, type TutorTurn } from './tutorClient';
+import { createTutorClient, createTutorTtsClient, TutorApiError, type TutorTurn } from './tutorClient';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -100,5 +100,40 @@ describe('tutorClient', () => {
     const fetchFn = mockFetch(() => jsonResponse({ candidates: [] }));
     const tutor = createTutorClient(fetchFn as unknown as typeof fetch);
     await expect(tutor([], [])).rejects.toBeInstanceOf(TutorApiError);
+  });
+
+  it('sends skipAudio in the body only when requested', async () => {
+    const fetchFn = mockFetch(() => jsonResponse(goodTurn));
+    const tutor = createTutorClient(fetchFn as unknown as typeof fetch);
+    await tutor([], [], { skipAudio: true });
+    expect(JSON.parse(fetchFn.mock.calls[0]?.[1]?.body as string)).toEqual({
+      history: [],
+      knownVocab: [],
+      skipAudio: true,
+    });
+  });
+});
+
+describe('createTutorTtsClient', () => {
+  it('POSTs the text to /api/tutor/tts and returns the voiced audio', async () => {
+    const fetchFn = mockFetch(() => jsonResponse({ audioBase64: 'cGNt', outputSampleRate: 24000 }));
+    const tts = createTutorTtsClient(fetchFn as unknown as typeof fetch);
+    const voiced = await tts('మీరు ఎలా ఉన్నారు?');
+    expect(voiced).toEqual({ audioBase64: 'cGNt', outputSampleRate: 24000 });
+    const call = fetchFn.mock.calls[0];
+    expect(call?.[0]).toBe('/api/tutor/tts');
+    expect(JSON.parse(call?.[1]?.body as string)).toEqual({ text: 'మీరు ఎలా ఉన్నారు?' });
+  });
+
+  it('throws TutorApiError on a non-2xx', async () => {
+    const fetchFn = mockFetch(() => jsonResponse({ error: 'TTS failed' }, 502));
+    const tts = createTutorTtsClient(fetchFn as unknown as typeof fetch);
+    await expect(tts('x')).rejects.toBeInstanceOf(TutorApiError);
+  });
+
+  it('throws on a malformed body', async () => {
+    const fetchFn = mockFetch(() => jsonResponse({ outputSampleRate: 24000 }));
+    const tts = createTutorTtsClient(fetchFn as unknown as typeof fetch);
+    await expect(tts('x')).rejects.toBeInstanceOf(TutorApiError);
   });
 });

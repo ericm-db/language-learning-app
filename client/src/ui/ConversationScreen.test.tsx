@@ -50,6 +50,9 @@ function render(state: Partial<ConversationStoreState>): void {
     rung: 0,
     lastNewVocab: [],
     inputMode: 'handsfree',
+    prefetchMode: 'balanced',
+    isCorrecting: false,
+    summary: null,
     lastFeedback: undefined,
     error: undefined,
     ...state,
@@ -162,6 +165,23 @@ describe('ConversationScreen', () => {
     expect(Array.from(buttons).map((b) => b.textContent)).toContain('Done speaking');
   });
 
+  it('offers "Fix it" once a learner reply exists', () => {
+    render({
+      status: 'listening',
+      turns: [{ ...tutorExchange, learnerReply: 'నేను బాగున్నాను' }],
+      candidates,
+      rung: 0,
+    });
+    const labels = Array.from(container.querySelectorAll('button')).map((b) => b.textContent ?? '');
+    expect(labels.some((b) => b.includes('Fix it'))).toBe(true);
+  });
+
+  it('does not offer "Fix it" before any reply exists', () => {
+    render({ status: 'listening', turns: [tutorExchange], candidates, rung: 0 });
+    const labels = Array.from(container.querySelectorAll('button')).map((b) => b.textContent ?? '');
+    expect(labels.some((b) => b.includes('Fix it'))).toBe(false);
+  });
+
   it('shows the new-words line, glossed, when lastNewVocab is set', () => {
     const newVocab: NewVocabView[] = [
       { telugu: 'ధన్యవాదాలు', romanization: 'dhanyavādālu', gloss: 'thank you' },
@@ -174,8 +194,42 @@ describe('ConversationScreen', () => {
     expect(text).toContain('thank you');
   });
 
+  it('renders the end-of-conversation recap: hiccups (romanized), encouragement, and Done', () => {
+    render({
+      status: 'summary',
+      summary: {
+        hiccups: [
+          { youSaid: 'నేను బాగుంది', youSaidRoman: 'nēnu bāgundi', better: 'నేను బాగున్నాను', betterRoman: 'nēnu bāgunnānu', note: 'verb ending for "I"' },
+        ],
+        encouragement: 'Well done!',
+      },
+    });
+    const text = container.textContent ?? '';
+    expect(text).toContain('How that went');
+    expect(text).toContain('Well done!');
+    expect(text).toContain('నేను బాగున్నాను'); // the better phrasing
+    expect(text).toContain('verb ending for "I"');
+    expect(Array.from(container.querySelectorAll('button')).map((b) => b.textContent)).toContain('Done');
+  });
+
   it('omits the new-words line when lastNewVocab is empty', () => {
     render({ status: 'listening', turns: [tutorExchange], candidates, rung: 0, lastNewVocab: [] });
     expect(container.querySelector('.conv-new-vocab')).toBeNull();
+  });
+
+  it('idle: shows the prefetch-mode control with the active mode pressed', () => {
+    render({ status: 'idle', prefetchMode: 'balanced' });
+    const labels = Array.from(container.querySelectorAll('.conv-pref button')).map((b) => b.textContent);
+    expect(labels).toEqual(['Off', 'Balanced', 'Fastest']);
+    const pressed = Array.from(container.querySelectorAll('.conv-pref button')).find(
+      (b) => b.getAttribute('aria-pressed') === 'true',
+    );
+    expect(pressed?.textContent).toBe('Balanced');
+
+    render({ status: 'idle', prefetchMode: 'off' });
+    const pressedOff = Array.from(container.querySelectorAll('.conv-pref button')).find(
+      (b) => b.getAttribute('aria-pressed') === 'true',
+    );
+    expect(pressedOff?.textContent).toBe('Off');
   });
 });

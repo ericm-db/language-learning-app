@@ -17,6 +17,8 @@ import { createProgressRoutes } from './routes/progress.js';
 import type { ProgressRepo } from './lib/progressRepo.js';
 import { createTranscribeRoute } from './routes/transcribe.js';
 import { createTutorRoute } from './routes/tutor.js';
+import { createLearnRoute } from './routes/learn.js';
+import { createListenRoute } from './routes/listen.js';
 
 export interface AppDeps {
   getTokenClient: () => TokenMintClient;
@@ -63,6 +65,8 @@ export function createApp(deps: AppDeps): Hono {
     createTranscribeRoute({ getCartesia: deps.getCartesiaClient, getSarvam: deps.getSarvamClient }),
   );
   app.route('/api/tutor', createTutorRoute({ getModel: deps.getTranslateModel, getCartesia: deps.getCartesiaClient }));
+  app.route('/api/learn', createLearnRoute({ getModel: deps.getTranslateModel, getCartesia: deps.getCartesiaClient }));
+  app.route('/api/listen', createListenRoute({ getModel: deps.getTranslateModel, getCartesia: deps.getCartesiaClient }));
 
   return app;
 }

@@ -68,7 +68,11 @@ export const MIN_RUNG = 0;
 export const MAX_RUNG = 3;
 // Advance after this many consecutive successes at-or-above the current rung;
 // a success is score >= SUCCESS_SCORE without leaning on the offered candidate.
-const ADVANCE_AFTER = 2;
+// Tuned to 3 (was 2): for a near-beginner, support was fading too fast — the
+// model grades generously and an improvised-but-simple correct reply counts as
+// a clean success, so two in a row stripped scaffolding before it was earned.
+// Requiring three sustained clean successes keeps support up longer.
+const ADVANCE_AFTER = 3;
 const SUCCESS_SCORE = 70;
 const RECENT_WINDOW = 6;
 

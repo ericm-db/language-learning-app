@@ -68,6 +68,15 @@ describe('POST /api/tutor/turn', () => {
     expect((await res.json()) as { tutor: { audioBase64: string } }).toMatchObject({ tutor: { audioBase64: '' } });
   });
 
+  it('skipAudio returns text with empty audio and never calls TTS (deferred prefetch)', async () => {
+    let ttsCalls = 0;
+    const ca: CartesiaClient = { stt: () => Promise.resolve(''), tts: () => { ttsCalls += 1; return Promise.resolve(Buffer.from([1])); } };
+    const res = await post(app(stubModel(goodTurn), ca), { history: [], skipAudio: true });
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { tutor: { audioBase64: string } }).toMatchObject({ tutor: { audioBase64: '' } });
+    expect(ttsCalls).toBe(0);
+  });
+
   it.each([
     ['non-array history', { history: 'nope' }],
     ['bad role', { history: [{ role: 'bot', text: 'x' }] }],
@@ -88,5 +97,78 @@ describe('POST /api/tutor/turn', () => {
 
   it('maps malformed model JSON to 502', async () => {
     expect((await post(app(stubModel('not json'), cartesia(Buffer.from([0]))), { history: [] })).status).toBe(502);
+  });
+});
+
+const summaryJson = JSON.stringify({
+  hiccups: [
+    { youSaid: 'నేను బాగుంది', better: 'నేను బాగున్నాను', note: 'Use the right verb ending for "I".' },
+  ],
+  encouragement: 'Good effort — you kept the conversation going!',
+});
+
+async function postSummary(a: Hono, body: unknown): Promise<Response> {
+  return await a.request('/api/tutor/summary', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+describe('POST /api/tutor/summary', () => {
+  const history = [
+    { role: 'tutor', text: 'మీరు ఎలా ఉన్నారు?' },
+    { role: 'learner', text: 'నేను బాగుంది' },
+  ];
+
+  it('returns the learner hiccups and an encouragement', async () => {
+    const res = await postSummary(app(stubModel(summaryJson), cartesia(Buffer.from([0]))), { history });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { hiccups: Array<{ youSaid: string; better: string; note?: string }>; encouragement: string };
+    expect(json.hiccups).toHaveLength(1);
+    expect(json.hiccups[0]).toMatchObject({ youSaid: 'నేను బాగుంది', better: 'నేను బాగున్నాను' });
+    expect(json.encouragement).toContain('Good effort');
+  });
+
+  it('passes the conversation into the prompt', async () => {
+    const m = stubModel(summaryJson);
+    await postSummary(app(m, cartesia(Buffer.from([0]))), { history });
+    expect(m.calls[0]?.contents as string).toContain('Learner: నేను బాగుంది');
+  });
+
+  it('accepts an empty hiccups list (did well)', async () => {
+    const res = await postSummary(app(stubModel(JSON.stringify({ hiccups: [], encouragement: 'Nice!' })), cartesia(Buffer.from([0]))), { history });
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { hiccups: unknown[] }).toMatchObject({ hiccups: [] });
+  });
+
+  it('maps malformed summary JSON to 502', async () => {
+    expect((await postSummary(app(stubModel('not json'), cartesia(Buffer.from([0]))), { history })).status).toBe(502);
+  });
+
+  it('rejects bad history with 400', async () => {
+    expect((await postSummary(app(stubModel(summaryJson), cartesia(Buffer.from([0]))), { history: 'nope' })).status).toBe(400);
+  });
+});
+
+async function postTts(a: Hono, body: unknown): Promise<Response> {
+  return await a.request('/api/tutor/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+describe('POST /api/tutor/tts', () => {
+  it('voices the text and returns base64 audio (no model call)', async () => {
+    const m = stubModel(goodTurn);
+    const res = await postTts(app(m, cartesia(Buffer.from([7, 8]))), { text: 'మీరు ఎలా ఉన్నారు?' });
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { audioBase64: string; outputSampleRate: number }).toEqual({
+      audioBase64: Buffer.from([7, 8]).toString('base64'),
+      outputSampleRate: 24000,
+    });
+    expect(m.calls).toHaveLength(0); // no Gemini call for plain voicing
+  });
+
+  it('rejects empty/missing text with 400', async () => {
+    expect((await postTts(app(stubModel(goodTurn), cartesia(Buffer.from([0]))), { text: '   ' })).status).toBe(400);
+    expect((await postTts(app(stubModel(goodTurn), cartesia(Buffer.from([0]))), {})).status).toBe(400);
+  });
+
+  it('maps a TTS failure to 502', async () => {
+    expect((await postTts(app(stubModel(goodTurn), failingTts()), { text: 'హాయ్' })).status).toBe(502);
   });
 });

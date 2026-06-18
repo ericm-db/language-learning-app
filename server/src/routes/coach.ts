@@ -2,7 +2,10 @@ import { Hono } from 'hono';
 import { Type } from '@google/genai';
 import type { GenerateContentParameters, Schema } from '@google/genai';
 
-export const COACH_MODEL = 'gemini-3.5-flash';
+// flash-lite, matching translate/tutor: gemini-3.5-flash graded fine but ran
+// ~3s (the model the rest of the app rejected as too slow), making review's
+// speak-then-grade feel broken. flash-lite grades semantic closeness in ~1s.
+export const COACH_MODEL = 'gemini-3.1-flash-lite';
 
 // Response shapes must match client/src/ports/CoachPort.ts exactly; the
 // client's CoachClient deserializes straight into these.

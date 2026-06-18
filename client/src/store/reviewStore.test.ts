@@ -77,50 +77,93 @@ function bind(overrides: Partial<ReviewDeps>): { submitReview: ReturnType<typeof
 }
 
 beforeEach(() => {
-  useReviewStore.setState({ status: 'idle', queue: [], index: 0, lastResult: null, error: null });
+  useReviewStore.setState({
+    status: 'idle',
+    mode: 'flashcard',
+    scope: 'due',
+    queue: [],
+    index: 0,
+    flipped: false,
+    reviewedCount: 0,
+    lastResult: null,
+    error: null,
+  });
 });
 
 describe('reviewStore', () => {
-  it('drives a full card: loadDue -> prompt -> record -> stopAndGrade -> revealed -> next -> empty', async () => {
+  it('speak: stopAndGrade reveals the grade as feedback but does NOT advance FSRS; the self-rate does', async () => {
     const progress = fakeProgress([reviewItem('p1', 'what is your name', 'నీ పేరు ఏంటి?')]);
     const grade = vi.fn<GradeFn>(async () => ({ score: 88, feedback: 'close' }));
     const transcribe = vi.fn<TranscribeFn>(async () => 'నీ పేరు ఏంటి');
     const { submitReview } = bind({ progress, grade, transcribe });
 
     await useReviewStore.getState().loadDue();
-    expect(useReviewStore.getState().status).toBe('prompt');
-    expect(useReviewStore.getState().queue).toHaveLength(1);
-
     await useReviewStore.getState().startRecording();
     expect(useReviewStore.getState().status).toBe('recording');
 
+    // Manual submit (the tiny fake chunk doesn't trip the VAD).
     await useReviewStore.getState().stopAndGrade();
 
-    // Transcribes Telugu at 16k, then grades the transcript against the target.
     expect(transcribe).toHaveBeenCalledTimes(1);
-    expect(transcribe.mock.calls[0]?.[0]).toBe('te');
-    expect(transcribe.mock.calls[0]?.[2]).toBe(16000);
     expect(grade).toHaveBeenCalledWith('నీ పేరు ఏంటి?', 'నీ పేరు ఏంటి');
-
-    // Records the attempt + advances FSRS with the review metadata.
-    const [phraseId, score, attempt] = submitReview.mock.calls[0] ?? [];
-    expect(phraseId).toBe('p1');
-    expect(score).toBe(88);
-    expect(attempt).toMatchObject({
-      transcript: 'నీ పేరు ఏంటి',
-      expected: 'నీ పేరు ఏంటి?',
-      prompt: 'what is your name',
-      mode: 'review',
-      isSpaced: true,
-    });
-    expect(typeof (attempt as { latencyMs?: unknown }).latencyMs).toBe('number');
-
     const revealed = useReviewStore.getState();
     expect(revealed.status).toBe('revealed');
+    // The model grade (88) is shown as feedback — but scheduling has NOT advanced.
     expect(revealed.lastResult).toEqual({ transcript: 'నీ పేరు ఏంటి', score: 88, feedback: 'close' });
+    expect(submitReview).not.toHaveBeenCalled();
+    expect(revealed.reviewedCount).toBe(0);
 
-    useReviewStore.getState().next();
-    expect(useReviewStore.getState().status).toBe('empty');
+    // Self-rating is what advances FSRS — with the rating's score, carrying the
+    // spoken transcript, then finishing the single-card session.
+    await useReviewStore.getState().rate('okay');
+    const [phraseId, score, attempt] = submitReview.mock.calls[0] ?? [];
+    expect(phraseId).toBe('p1');
+    expect(score).toBe(60); // RATING_SCORES.okay
+    expect(attempt).toMatchObject({ transcript: 'నీ పేరు ఏంటి', mode: 'review', isSpaced: true });
+    expect(useReviewStore.getState().reviewedCount).toBe(1);
+    expect(useReviewStore.getState().status).toBe('done');
+  });
+
+  it('flashcard self-rate advances FSRS and moves to the next card', async () => {
+    const progress = fakeProgress([
+      reviewItem('p1', 'what is your name', 'నీ పేరు ఏంటి?'),
+      reviewItem('p2', 'how are you', 'ఎలా ఉన్నావు?'),
+    ]);
+    const { submitReview } = bind({ progress });
+
+    await useReviewStore.getState().loadDue();
+    useReviewStore.getState().flip();
+    expect(useReviewStore.getState().flipped).toBe(true);
+
+    await useReviewStore.getState().rate('good');
+
+    // Self-rate submits a 'review' with the Good score and no transcript, then
+    // advances to the next card (front side).
+    const [phraseId, score, attempt] = submitReview.mock.calls[0] ?? [];
+    expect(phraseId).toBe('p1');
+    expect(score).toBe(85); // RATING_SCORES.good
+    expect(attempt).toMatchObject({ mode: 'review', transcript: '', isSpaced: true });
+    const s = useReviewStore.getState();
+    expect(s.index).toBe(1);
+    expect(s.flipped).toBe(false);
+    expect(s.reviewedCount).toBe(1);
+    expect(s.status).toBe('prompt');
+  });
+
+  it('loadAll builds a whole-deck queue from listPhrases (study-ahead)', async () => {
+    const progress = fakeProgress([]);
+    (progress.listPhrases as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 'p1', sourceText: 'water', targetText: 'నీళ్ళు', romanization: '' },
+      { id: 'p2', sourceText: 'food', targetText: 'తిండి', romanization: '' },
+    ]);
+    bind({ progress });
+
+    await useReviewStore.getState().loadAll();
+    const s = useReviewStore.getState();
+    expect(s.status).toBe('prompt');
+    expect(s.scope).toBe('all');
+    expect(s.queue).toHaveLength(2);
+    expect(s.queue[0]?.phrase.sourceText).toBe('water');
   });
 
   it('loadDue with no due cards goes straight to empty', async () => {
@@ -129,32 +172,36 @@ describe('reviewStore', () => {
     expect(useReviewStore.getState().status).toBe('empty');
   });
 
-  it('a transcribe rejection sets error status', async () => {
+  it('a transcribe failure still reveals the answer instead of dead-ending', async () => {
     bind({
       progress: fakeProgress([reviewItem('p1', 'hi', 'హాయ్')]),
       transcribe: async () => {
-        throw new Error('stt down');
+        throw new Error('Failed to fetch');
       },
     });
     await useReviewStore.getState().loadDue();
     await useReviewStore.getState().startRecording();
     await useReviewStore.getState().stopAndGrade();
-    expect(useReviewStore.getState().status).toBe('error');
-    expect(useReviewStore.getState().error).toBe('stt down');
+    const s = useReviewStore.getState();
+    expect(s.status).toBe('revealed'); // not 'error'
+    expect(s.lastResult?.transcript).toBe('');
+    expect(s.lastResult?.feedback).toContain('Failed to fetch');
   });
 
-  it('a grade rejection sets error status', async () => {
+  it('a grade failure still reveals the transcript + answer (score skipped)', async () => {
     bind({
       progress: fakeProgress([reviewItem('p1', 'hi', 'హాయ్')]),
       grade: async () => {
-        throw new Error('grader down');
+        throw new Error('Failed to fetch');
       },
     });
     await useReviewStore.getState().loadDue();
     await useReviewStore.getState().startRecording();
     await useReviewStore.getState().stopAndGrade();
-    expect(useReviewStore.getState().status).toBe('error');
-    expect(useReviewStore.getState().error).toBe('grader down');
+    const s = useReviewStore.getState();
+    expect(s.status).toBe('revealed'); // not 'error'
+    expect(s.lastResult?.transcript).toBe('నీ పేరు ఏంటి?'); // transcribe succeeded
+    expect(s.lastResult?.feedback).toContain("Couldn't score");
   });
 
   it('errors when nothing is bound', async () => {

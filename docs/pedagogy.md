@@ -90,3 +90,50 @@ attempt (`is_spaced = 1`). Current scaffold rung per phrase is computed from `at
 3. Does the **romanization itself** become a crutch (vs Telugu script / pure listening) in
    a diglossic context — i.e., a second scaffold dimension to fade?
 4. Which corrective-feedback style fits a real-time speech app without breaking flow?
+
+---
+
+## Research update (2026-06-18): the Learn & Listen tabs
+
+A second evidence pass (a 110-agent deep-research run on the daily-practice design, then a
+focused verify-and-refute on the load-bearing claims) drove the **Learn** and **Listen** tabs
+and demoted the translation drill. Confidence and the contradicting evidence are noted because
+several recommendations are theory-consistent extrapolations, not proven for absolute beginners
+of an agglutinative, diglossic language.
+
+**Verified findings (with confidence):**
+- **Interaction has the largest, most durable effect** on acquisition (Keck et al.; Mackey &
+  Goo). *High.* → Converse (real back-and-forth) is where conversation is actually acquired.
+- **Comprehension is necessary but not sufficient** (Loschky 1994); CI-alone is rejected by
+  current work in favor of interaction + output. *High.*
+- **Skill-specificity** (Shintani 2015 meta; Rassaei): input practice builds *comprehension*,
+  output practice builds *production*. *High.* → a speaking goal **requires** output; a listening
+  tab builds listening, **not** speaking.
+- **Perception ≠ production**: no individual-level correlation, "different representations"
+  (Nagle); perceptual *training* transfers to production only **small/inconsistently** (HVPT
+  meta g≈0.49 production vs 0.96 perception, poor retention). *High.*
+- **Corrective feedback** works for beginners (Li 2010, d≈0.6, durable); **recast-first + an
+  optional explicit "why"** captures both the short-term explicit edge and the durable implicit
+  edge; CF timing barely matters. *High.* → the recast + tap-to-expand "why" in Learn/Converse.
+- **Shadowing** improves low-level learners' **listening comprehension *and* pronunciation**
+  (Hamada) — but raw shadowing risks overload for novices, so **scaffold it** (show the script).
+  Its strongest, most consistent payoff is pronunciation. *Medium-high.*
+- **High-frequency spoken chunks** (Nation): top-1000 covers ~85% of speech; **95% coverage
+  (~2–3k words) suffices for listening** (van Zeeland & Schmitt), lower than reading. *High.*
+
+**Honest gaps / extrapolations (do not overclaim):**
+- "Chunks beat isolated words" is proven for *advanced* learners — an extrapolation for beginners.
+- "Pushed output → durable acquisition for absolute beginners" is genuinely **open** (Krashen's
+  critique survives); so keep output **light** and pair with strong input, not output-only.
+- **Teaching Telugu agglutinative conjugation** (chunk-first vs explicit-rule vs induction) was
+  **not resolved** — default to chunk-first + light "why", no grammar tables; needs targeted
+  follow-up (DeKeyser automatization, R. Ellis FFI, Pienemann).
+- Anti-patterns confirmed to avoid: **translation drilling** (the old first tab), isolated-word
+  lists, premature free production, grammar-table memorization, passive CI-only feeds.
+
+**How the tabs answer this:** **Learn** = input(hear chunk) + light output(say a substitution) +
+recast + FSRS — input + production for a speaking goal, on high-frequency chunks. **Listen** =
+scaffolded comprehensible listening + a typed comprehension check (active recall) + optional
+shadowing — receptive + pronunciation, honestly *complementing* Converse, not replacing it for
+conversation. Both are research-*informed*; the `attempts`/FSRS data remains the instrument to
+calibrate them.

@@ -11,12 +11,16 @@ import { StreamingTranslationAdapter } from '../adapters/stream/StreamingTransla
 import { createTranslateClient } from '../adapters/http/translateClient';
 import { createTranscribeClient } from '../adapters/http/transcribeClient';
 import { createProgressClient } from '../adapters/http/progressClient';
-import { createTutorClient } from '../adapters/http/tutorClient';
+import { createTutorClient, createTutorSummaryClient, createTutorTtsClient } from '../adapters/http/tutorClient';
+import { createLearnClient } from '../adapters/http/learnClient';
+import { createListenClient, createListenCheckClient } from '../adapters/http/listenClient';
 import { CoachClient } from '../adapters/http/CoachClient';
 import { initTokenPrefetch, tokenProvider } from '../adapters/http/tokenProvider';
 import { createDrillCoordinator } from '../core/coordinator/DrillCoordinator';
 import type { TranslationPort } from '../ports/TranslationPort';
 import { bindConversation } from '../store/conversationStore';
+import { bindLearn } from '../store/learnStore';
+import { bindListen } from '../store/listenStore';
 import { useDrillStore } from '../store/drillStore';
 import { bindReview } from '../store/reviewStore';
 
@@ -80,6 +84,35 @@ bindReview({
 // App.switchScreen stops one before starting another, so only one is ever live.
 bindConversation({
   tutor: createTutorClient(),
+  summarize: createTutorSummaryClient(),
+  synthesize: createTutorTtsClient(),
+  progress: createProgressClient(),
+  transcribe: createTranscribeClient(),
+  capture: new WorkletCapture(),
+  playback,
+  // Speculatively prefetch the tutor's reply to each shown candidate so a
+  // matching learner reply is served without a fresh Gemini round-trip (the
+  // dominant per-turn latency). The user-facing prefetchMode picks how far to go
+  // (off / balanced=text-only / fastest=text+audio); this flag just enables it.
+  prefetch: true,
+});
+
+// Learn (the research-backed first tab): a chunk-driven input->output loop. Its
+// own WorkletCapture (only one mic surface is live at a time, per switchScreen);
+// reuses the shared playback singleton.
+bindLearn({
+  learn: createLearnClient(),
+  progress: createProgressClient(),
+  transcribe: createTranscribeClient(),
+  capture: new WorkletCapture(),
+  playback,
+});
+
+// Listen (shadowing): hear a short chunk, repeat it, check the meaning. Own
+// WorkletCapture (one mic surface live at a time); shared playback singleton.
+bindListen({
+  listen: createListenClient(),
+  check: createListenCheckClient(),
   progress: createProgressClient(),
   transcribe: createTranscribeClient(),
   capture: new WorkletCapture(),

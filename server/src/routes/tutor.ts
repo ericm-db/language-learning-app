@@ -46,6 +46,7 @@ const TURN_SCHEMA: Schema = {
       },
     },
     feedback: { type: Type.STRING, description: 'Optional one-line friendly note on the learner last reply; empty if none' },
+    learnerGloss: { type: Type.STRING, description: "Plain English meaning of the LEARNER's last reply EXACTLY as transcribed (so they can confirm speech recognition understood them); empty if there is no learner turn yet" },
     learnerScore: { type: Type.INTEGER, description: 'Quality 0-100 of the learner last reply (intelligibility + appropriateness); 0 if there is no learner turn yet' },
     newVocab: {
       type: Type.ARRAY,
@@ -106,6 +107,8 @@ function prompt(history: TurnMsg[], knownVocab: string[]): string {
     'short), each as a candidate reply with its English meaning — these help a stuck beginner respond.',
     'If the learner\'s last reply had a clear mistake, add ONE short friendly note (a gentle recast);',
     'otherwise leave feedback empty. Do not lecture.',
+    'Also give learnerGloss: the plain English MEANING of the learner\'s last reply exactly as it was',
+    'transcribed, so they can confirm the speech recognition understood them (empty if no learner turn yet).',
     'Also score the learner\'s LAST reply 0-100 on intelligibility and appropriateness as a Telugu',
     'response (be encouraging but honest); use 0 if there is no learner turn yet.',
     '',
@@ -128,6 +131,45 @@ function parseModelJson(text: string | undefined): unknown {
   }
 }
 
+// End-of-conversation recap: the learner's main hiccups + how to say them
+// better, and a short encouragement. Text only (no TTS).
+const SUMMARY_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    hiccups: {
+      type: Type.ARRAY,
+      description: "The learner's main hiccups this conversation (mistakes, awkward/unnatural phrasings, things they struggled with). Empty if they did well.",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          youSaid: { type: Type.STRING, description: 'What the learner actually said (Telugu script, as transcribed)' },
+          better: { type: Type.STRING, description: 'A more correct/natural colloquial Telugu way to say it, Telugu script' },
+          note: { type: Type.STRING, description: 'ONE short plain-English note on the fix (no jargon)' },
+        },
+        required: ['youSaid', 'better'],
+      },
+    },
+    encouragement: { type: Type.STRING, description: 'ONE short, warm encouraging line about how the conversation went' },
+  },
+  required: ['hiccups'],
+};
+
+function summaryPrompt(history: TurnMsg[]): string {
+  const transcript = history.map((m) => `${m.role === 'tutor' ? 'Tutor' : 'Learner'}: ${m.text}`).join('\n');
+  return [
+    'Below is a finished conversation between a Telugu tutor and an English-speaking near-beginner.',
+    'Review ONLY the LEARNER\'s turns and pick out their main hiccups — clear mistakes, unnatural or',
+    'wrong phrasings, or things they clearly struggled with. For each, give: youSaid (what they said,',
+    'Telugu script), better (a more correct/natural COLLOQUIAL spoken-Telugu way to say it), and note',
+    '(one short plain-English explanation). Focus on the few MOST useful corrections (at most 5), not',
+    'every tiny thing. If they did well with no notable hiccups, return an empty hiccups list. Always',
+    'add one short, warm encouragement line.',
+    '',
+    'Conversation:',
+    transcript,
+  ].join('\n');
+}
+
 export function createTutorRoute(deps: TutorRouteDeps): Hono {
   const routes = new Hono();
   const upstreamError = { error: 'Tutor request failed' };
@@ -143,6 +185,10 @@ export function createTutorRoute(deps: TutorRouteDeps): Hono {
     const history = parseHistory(body.history ?? []);
     if (history === null) return c.json({ error: 'history must be an array of {role,text}' }, 400);
     const knownVocab = parseKnownVocab(body.knownVocab);
+    // Speculative prefetch in "balanced" mode asks for the text only and defers
+    // voicing until the turn is actually served — so we don't synthesize (and
+    // pay for) audio that gets discarded when the learner says something else.
+    const skipAudio = body.skipAudio === true;
 
     let model: TutorModelClient;
     let cartesia: CartesiaClient;
@@ -157,6 +203,7 @@ export function createTutorRoute(deps: TutorRouteDeps): Hono {
     let tutorGloss: string;
     let candidates: Array<{ telugu: string; gloss: string }>;
     let feedback: string | undefined;
+    let learnerGloss: string | undefined;
     let learnerScore: number | undefined;
     let newVocab: Array<{ telugu: string; gloss: string }> = [];
     try {
@@ -178,6 +225,7 @@ export function createTutorRoute(deps: TutorRouteDeps): Hono {
         .slice(0, 3)
         .map((x) => ({ telugu: x.telugu.trim(), gloss: x.gloss.trim() }));
       feedback = typeof parsed.feedback === 'string' && parsed.feedback.trim().length > 0 ? parsed.feedback.trim() : undefined;
+      learnerGloss = typeof parsed.learnerGloss === 'string' && parsed.learnerGloss.trim().length > 0 ? parsed.learnerGloss.trim() : undefined;
       if (typeof parsed.learnerScore === 'number' && Number.isFinite(parsed.learnerScore)) {
         learnerScore = Math.max(0, Math.min(100, Math.round(parsed.learnerScore)));
       }
@@ -193,11 +241,14 @@ export function createTutorRoute(deps: TutorRouteDeps): Hono {
     }
 
     // Voicing is best-effort; the client can still show text if TTS hiccups.
-    let audioBase64: string;
-    try {
-      audioBase64 = (await cartesia.tts(tutorTelugu, 'te', OUTPUT_SAMPLE_RATE)).toString('base64');
-    } catch {
-      audioBase64 = '';
+    // skipAudio (deferred-TTS prefetch) returns text now and voices later via /tts.
+    let audioBase64 = '';
+    if (!skipAudio) {
+      try {
+        audioBase64 = (await cartesia.tts(tutorTelugu, 'te', OUTPUT_SAMPLE_RATE)).toString('base64');
+      } catch {
+        audioBase64 = '';
+      }
     }
 
     // learnerScore only meaningful when the learner has just spoken.
@@ -207,8 +258,81 @@ export function createTutorRoute(deps: TutorRouteDeps): Hono {
       candidates,
       newVocab,
       ...(feedback === undefined ? {} : { feedback }),
+      ...(lastWasLearner && learnerGloss !== undefined ? { learnerGloss } : {}),
       ...(lastWasLearner && learnerScore !== undefined ? { learnerScore } : {}),
     });
+  });
+
+  // End-of-conversation recap of the learner's hiccups (text only, no TTS).
+  routes.post('/summary', async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'Body must be JSON' }, 400);
+    }
+    if (!isRecord(body)) return c.json({ error: 'Body must be a JSON object' }, 400);
+    const history = parseHistory(body.history ?? []);
+    if (history === null) return c.json({ error: 'history must be an array of {role,text}' }, 400);
+
+    let model: TutorModelClient;
+    try {
+      model = deps.getModel();
+    } catch {
+      return c.json({ error: 'Server is not configured' }, 500);
+    }
+
+    try {
+      const response = await model.models.generateContent({
+        model: TUTOR_MODEL,
+        contents: summaryPrompt(history),
+        config: { responseMimeType: 'application/json', responseSchema: SUMMARY_SCHEMA },
+      });
+      const parsed = parseModelJson(response.text);
+      if (!isRecord(parsed) || !Array.isArray(parsed.hiccups)) {
+        return c.json(upstreamError, 502);
+      }
+      const hiccups = parsed.hiccups
+        .filter((x): x is { youSaid: string; better: string; note?: string } =>
+          isRecord(x) && typeof x.youSaid === 'string' && x.youSaid.trim().length > 0 &&
+          typeof x.better === 'string' && x.better.trim().length > 0)
+        .slice(0, 5)
+        .map((x) => ({ youSaid: x.youSaid.trim(), better: x.better.trim(), ...(typeof x.note === 'string' && x.note.trim().length > 0 ? { note: x.note.trim() } : {}) }));
+      const encouragement = typeof parsed.encouragement === 'string' && parsed.encouragement.trim().length > 0 ? parsed.encouragement.trim() : undefined;
+      return c.json({ hiccups, ...(encouragement === undefined ? {} : { encouragement }) });
+    } catch {
+      return c.json(upstreamError, 502);
+    }
+  });
+
+  // Voice a single tutor utterance (no model call). Used to synthesize audio for
+  // a deferred-TTS prefetch turn at the moment it's served, so the speculative
+  // turns that never get used cost no TTS credits.
+  routes.post('/tts', async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'Body must be JSON' }, 400);
+    }
+    if (!isRecord(body) || typeof body.text !== 'string' || body.text.trim().length === 0) {
+      return c.json({ error: 'text is required' }, 400);
+    }
+    const text = body.text.slice(0, MAX_TEXT);
+
+    let cartesia: CartesiaClient;
+    try {
+      cartesia = deps.getCartesia();
+    } catch {
+      return c.json({ error: 'Server is not configured' }, 500);
+    }
+
+    try {
+      const audioBase64 = (await cartesia.tts(text, 'te', OUTPUT_SAMPLE_RATE)).toString('base64');
+      return c.json({ audioBase64, outputSampleRate: OUTPUT_SAMPLE_RATE });
+    } catch {
+      return c.json({ error: 'TTS failed' }, 502);
+    }
   });
 
   return routes;
