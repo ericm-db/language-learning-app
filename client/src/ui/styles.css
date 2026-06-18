@@ -935,6 +935,17 @@ button:disabled {
   font-size: 1.125rem;
 }
 
+/* The new content words this lesson introduces — the vocabulary to actually
+   acquire, called out so they don't get lost inside the carrier phrase. */
+.learn-new-words {
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface, rgba(127, 127, 127, 0.08));
+  border-radius: 0.5rem;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
 .learn-replay {
   font-size: 0.875rem;
 }
@@ -1061,4 +1072,36 @@ button:disabled {
   .panes {
     grid-template-columns: 1fr;
   }
+}
+
+/* Login gate: full-screen sign-in shown before the app when auth is required. */
+.login-gate {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+}
+
+.login-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  max-width: 22rem;
+  text-align: center;
+}
+
+.login-title {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.login-blurb {
+  margin: 0;
+  color: var(--muted);
+}
+
+.login-button {
+  min-height: 44px;
 }

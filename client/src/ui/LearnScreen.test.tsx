@@ -12,6 +12,7 @@ import { LearnScreen } from './LearnScreen';
 const lessonView: LessonView = {
   chunk: { telugu: 'నాకు నీళ్ళు కావాలి', romanization: 'nāku nīḷḷu kāvāli', gloss: 'I want water' },
   substitutions: [{ prompt: 'I want tea', telugu: 'నాకు టీ కావాలి', romanization: 'nāku ṭī kāvāli' }],
+  newWords: [{ telugu: 'నీళ్ళు', romanization: 'nīḷḷu', gloss: 'water' }],
   why: 'Swap the middle word for what you want.',
 };
 
@@ -57,6 +58,14 @@ describe('LearnScreen', () => {
     expect(text).toContain('I want water');
     const labels = Array.from(container.querySelectorAll('button')).map((b) => b.textContent ?? '');
     expect(labels.some((b) => b.includes('Practice saying it'))).toBe(true);
+  });
+
+  it('input: calls out the new content words to acquire', () => {
+    render({ status: 'input', lesson: lessonView, subIndex: 0 });
+    const line = container.querySelector('.learn-new-words');
+    expect(line?.textContent ?? '').toContain('New words:');
+    expect(line?.textContent ?? '').toContain('నీళ్ళు');
+    expect(line?.textContent ?? '').toContain('water');
   });
 
   it('listening: shows the substitution prompt to say, and a Done fallback', () => {

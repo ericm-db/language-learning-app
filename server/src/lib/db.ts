@@ -68,23 +68,33 @@ export function migrate(db: DatabaseSync): void {
   db.exec(MIGRATION);
 }
 
-let cached: DatabaseSync | undefined;
-
-/** Opens (and migrates) the progress DB. DATA_DIR holds the file on a volume. */
-export function getDb(): DatabaseSync {
-  if (cached) return cached;
-  const dir = process.env.DATA_DIR ?? '.';
-  mkdirSync(dir, { recursive: true }); // create the data dir if absent (no-op on Fly's mount)
-  const db = new DatabaseSync(join(dir, 'progress.db'));
-  migrate(db);
-  cached = db;
-  return cached;
+// Per-user isolation is a SEPARATE SQLite FILE per user (progress-<userId>.db),
+// not user_id columns — fresh-per-user with no schema rewrite, and a user can
+// never read another's rows. The 'local' user (auth disabled: dev/tests) keeps
+// the original progress.db so existing local data and tests are unaffected.
+function dbFileFor(userId: string): string {
+  if (userId === 'local') return 'progress.db';
+  const safe = userId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
+  return `progress-${safe}.db`;
 }
 
-let cachedRepo: ProgressRepo | undefined;
+function openDb(userId: string): DatabaseSync {
+  const dir = process.env.DATA_DIR ?? '.';
+  mkdirSync(dir, { recursive: true }); // create the data dir if absent (no-op on Fly's mount)
+  const db = new DatabaseSync(join(dir, dbFileFor(userId)));
+  migrate(db);
+  return db;
+}
 
-/** Cached ProgressRepo over the opened DB; one connection for the long-lived server. */
-export function getProgressRepo(): ProgressRepo {
-  if (!cachedRepo) cachedRepo = new ProgressRepo(getDb());
-  return cachedRepo;
+const repos = new Map<string, ProgressRepo>();
+
+/** Cached ProgressRepo for the given user (one open connection each); defaults to
+ *  the single 'local' user when auth is disabled. */
+export function getProgressRepo(userId = 'local'): ProgressRepo {
+  let repo = repos.get(userId);
+  if (repo === undefined) {
+    repo = new ProgressRepo(openDb(userId));
+    repos.set(userId, repo);
+  }
+  return repo;
 }

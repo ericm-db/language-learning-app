@@ -13,10 +13,13 @@ RUN npm ci
 
 # Build the server (tsc -> server/dist) and the client (vite -> client/dist).
 # The client is built for streaming mode (the long-lived server supports it).
+# VITE_GOOGLE_CLIENT_ID is a PUBLIC client id baked into the SPA (safe to expose);
+# pass it at build time: `flyctl deploy --build-arg VITE_GOOGLE_CLIENT_ID=...`.
+ARG VITE_GOOGLE_CLIENT_ID=""
 COPY server ./server
 COPY client ./client
 RUN npm run build --workspace=@telugu-practice/server
-RUN VITE_TRANSLATION=stream npm run build --workspace=@telugu-practice/client
+RUN VITE_TRANSLATION=stream VITE_GOOGLE_CLIENT_ID="$VITE_GOOGLE_CLIENT_ID" npm run build --workspace=@telugu-practice/client
 
 # Runtime: node_modules + compiled server + the built client (served by the server).
 FROM node:24-slim AS runtime

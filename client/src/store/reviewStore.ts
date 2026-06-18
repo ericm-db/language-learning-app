@@ -17,6 +17,7 @@ import type { AudioCapturePort } from '../ports/AudioCapturePort';
 import type { ProgressPort, ReviewItem } from '../ports/ProgressPort';
 import type { LanguageTag, PcmChunk } from '../ports/types';
 import { createEndpointer, type Endpointer } from '../core/vad';
+import { micErrorMessage } from './micError';
 
 /** Grade a spoken attempt against the target. Subset of CoachPort.gradeAttempt. */
 export type GradeFn = (
@@ -331,7 +332,7 @@ export const useReviewStore = create<ReviewStoreState>()((set, get) => {
         })();
       } catch (err) {
         endpointer = null;
-        set({ status: 'prompt', error: errorMessage(err) });
+        set({ status: 'prompt', error: micErrorMessage(err) });
       }
     },
 

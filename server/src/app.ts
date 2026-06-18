@@ -19,6 +19,10 @@ import { createTranscribeRoute } from './routes/transcribe.js';
 import { createTutorRoute } from './routes/tutor.js';
 import { createLearnRoute } from './routes/learn.js';
 import { createListenRoute } from './routes/listen.js';
+import { createAuthRoutes } from './routes/auth.js';
+import { requireAuth, type AuthConfig, type AuthEnv, type GoogleVerifier } from './lib/auth.js';
+
+const DISABLED_AUTH: AuthConfig = { enabled: false, googleClientId: '', allowedEmails: new Set(), sessionSecret: '' };
 
 export interface AppDeps {
   getTokenClient: () => TokenMintClient;
@@ -26,25 +30,38 @@ export interface AppDeps {
   getTranslateModel: () => TranslateModelClient;
   getCartesiaClient: () => CartesiaClient;
   getSarvamClient: () => SarvamSttClient;
-  /** Progress DB repo; needs the long-lived server (persistent volume), not serverless. */
-  getProgressRepo: () => ProgressRepo;
+  /** Per-user progress DB repo; needs the long-lived server (volume), not serverless. */
+  getProgressRepo: (userId: string) => ProgressRepo;
+  /** Google OAuth + allowlist config. Omitted/disabled → single 'local' user, no login. */
+  auth?: AuthConfig;
+  /** Injectable Google token verifier (tests); defaults to the tokeninfo call. */
+  verifyToken?: GoogleVerifier;
   tokenRateLimit?: RateLimitOptions;
 }
 
-export function createApp(deps: AppDeps): Hono {
-  const app = new Hono();
+export function createApp(deps: AppDeps): Hono<AuthEnv> {
+  const app = new Hono<AuthEnv>();
   const allowedOrigin = process.env.ALLOWED_ORIGIN ?? 'http://localhost:5173';
+  const auth = deps.auth ?? DISABLED_AUTH;
 
   app.use(
     '/api/*',
     cors({
       origin: allowedOrigin,
+      // Same-origin in prod (SPA + API on one host) and Vite-proxied in dev, so
+      // the session cookie rides along without cross-origin credentials and CORS
+      // never actually gates real requests.
       allowMethods: ['POST'],
       credentials: false,
     }),
   );
 
   app.get('/healthz', (c) => c.text('ok'));
+
+  // Public auth endpoints, then the gate. requireAuth lets /api/auth/* through and
+  // (when enabled) requires a valid session for everything else under /api.
+  app.route('/api/auth', createAuthRoutes({ config: auth, ...(deps.verifyToken ? { verify: deps.verifyToken } : {}) }));
+  app.use('/api/*', requireAuth(auth));
 
   // Each minted token is spendable Live API quota, so the limiter sits on
   // /api/token only (see lib/rateLimit.ts for the single-instance caveat).

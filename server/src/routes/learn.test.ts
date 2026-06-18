@@ -49,6 +49,26 @@ describe('POST /api/learn/next', () => {
     expect(m.calls[0]?.contents as string).toContain('నమస్కారం');
   });
 
+  it('feeds recentChunks into the prompt so the frame varies', async () => {
+    const m = stubModel(goodLesson);
+    await post(app(m, cartesia(Buffer.from([0]))), { knownVocab: [], recentChunks: ['I like music', 'I like mango'] });
+    const contents = m.calls[0]?.contents as string;
+    expect(contents).toContain('I like music');
+    expect(contents).toContain('DIFFERENT'); // the variety instruction
+  });
+
+  it('returns newWords when the model introduces them, and [] when absent', async () => {
+    const withWords = JSON.stringify({
+      ...JSON.parse(goodLesson),
+      newWords: [{ telugu: 'నీళ్ళు', gloss: 'water' }],
+    });
+    const res = await post(app(stubModel(withWords), cartesia(Buffer.from([0]))), { knownVocab: [] });
+    expect((await res.json()) as { newWords: unknown }).toMatchObject({ newWords: [{ telugu: 'నీళ్ళు', gloss: 'water' }] });
+    // goodLesson has no newWords -> normalized to [].
+    const res2 = await post(app(stubModel(goodLesson), cartesia(Buffer.from([0]))), { knownVocab: [] });
+    expect((await res2.json()) as { newWords: unknown[] }).toMatchObject({ newWords: [] });
+  });
+
   it('still returns 200 with empty audio when TTS fails (voicing is best-effort)', async () => {
     const res = await post(app(stubModel(goodLesson), failingTts()), { knownVocab: [] });
     expect(res.status).toBe(200);

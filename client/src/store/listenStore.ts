@@ -15,6 +15,7 @@ import { romanize } from '../core/romanize';
 import { createEndpointer, type Endpointer } from '../core/vad';
 import { matchesTarget } from './learnStore';
 import { saveNewWord, vocabId } from './vocabEngine';
+import { micErrorMessage } from './micError';
 import type { ListenChunk } from '../adapters/http/listenClient';
 
 export type ListenFn = (knownVocab: string[]) => Promise<ListenChunk>;
@@ -182,7 +183,7 @@ export const useListenStore = create<ListenStoreState>()((set, get) => {
       })();
     } catch (err) {
       endpointer = null;
-      if (token === turnToken) set({ status: 'error', error: errorMessage(err) });
+      if (token === turnToken) set({ status: 'error', error: micErrorMessage(err) });
     }
   }
 

@@ -22,14 +22,24 @@ export interface LearnSubstitution {
   outputSampleRate: number;
 }
 
+/** A new content word the lesson introduces, to seed the review deck. */
+export interface LearnVocab {
+  telugu: string;
+  gloss: string;
+}
+
 export interface Lesson {
   chunk: LearnChunk;
   substitutions: LearnSubstitution[];
+  /** 1-3 new content words introduced this lesson; [] when absent. */
+  newWords: LearnVocab[];
   /** Light, plain-English pattern note; absent when none. */
   why?: string;
 }
 
-export type LearnClient = (knownVocab: string[]) => Promise<Lesson>;
+/** recentChunks = glosses of recently-taught chunks, so the server varies the
+ *  frame instead of regressing to the most common one. */
+export type LearnClient = (knownVocab: string[], recentChunks: string[]) => Promise<Lesson>;
 
 export class LearnApiError extends Error {
   readonly status: number;
@@ -44,11 +54,11 @@ export class LearnApiError extends Error {
 type FetchFn = typeof fetch;
 
 export function createLearnClient(fetchFn: FetchFn = fetch): LearnClient {
-  return async (knownVocab) => {
+  return async (knownVocab, recentChunks) => {
     const res = await fetchFn('/api/learn/next', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ knownVocab }),
+      body: JSON.stringify({ knownVocab, recentChunks }),
     });
     if (!res.ok) {
       let detail = `status ${res.status}`;
@@ -69,7 +79,8 @@ export function createLearnClient(fetchFn: FetchFn = fetch): LearnClient {
     if (!isLesson(body)) {
       throw new LearnApiError(res.status, '/api/learn/next returned a malformed body');
     }
-    return body;
+    // newWords is optional on the wire; normalize a missing value to [].
+    return { ...body, newWords: body.newWords ?? [] };
   };
 }
 
@@ -77,7 +88,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isLesson(value: unknown): value is Lesson {
+// Narrows to a lesson where newWords may be absent (the caller defaults it to []).
+function isLesson(value: unknown): value is Omit<Lesson, 'newWords'> & { newWords?: LearnVocab[] } {
   if (!isRecord(value)) return false;
   const chunk = value.chunk;
   if (
@@ -102,5 +114,11 @@ function isLesson(value: unknown): value is Lesson {
     }
   }
   if (value.why !== undefined && typeof value.why !== 'string') return false;
+  if (value.newWords !== undefined) {
+    if (!Array.isArray(value.newWords)) return false;
+    for (const w of value.newWords) {
+      if (!isRecord(w) || typeof w.telugu !== 'string' || typeof w.gloss !== 'string') return false;
+    }
+  }
   return true;
 }

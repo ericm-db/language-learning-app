@@ -19,6 +19,7 @@ import type { ProgressPort } from '../ports/ProgressPort';
 import type { LanguageTag, PcmChunk, Unsubscribe } from '../ports/types';
 import { romanize } from '../core/romanize';
 import { createEndpointer, type Endpointer } from '../core/vad';
+import { micErrorMessage } from './micError';
 import { saveNewWords } from './vocabEngine';
 
 /** One message in the dialogue history sent to the tutor. */
@@ -587,7 +588,7 @@ export const useConversationStore = create<ConversationStoreState>()((set, get) 
       })();
     } catch (err) {
       endpointer = null;
-      if (token === turnToken) set({ status: 'error', error: errorMessage(err) });
+      if (token === turnToken) set({ status: 'error', error: micErrorMessage(err) });
     }
   }
 

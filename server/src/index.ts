@@ -7,6 +7,7 @@ import { assertGenAIConfiguredForProduction, getGenAI } from './lib/genai.js';
 import { assertCartesiaConfiguredForProduction, getCartesia } from './lib/cartesia.js';
 import { assertSarvamConfiguredForProduction, getSarvam } from './lib/sarvam.js';
 import { getProgressRepo } from './lib/db.js';
+import { loadAuthConfig } from './lib/auth.js';
 import { createApp } from './app.js';
 import { createStreamSession } from './lib/streamSession.js';
 import type { StreamSession } from './lib/streamSession.js';
@@ -28,6 +29,11 @@ if (process.env.NODE_ENV !== 'test') {
   assertGenAIConfiguredForProduction();
   assertCartesiaConfiguredForProduction();
   assertSarvamConfiguredForProduction();
+  const auth = loadAuthConfig();
+  // Allowlist auth protects provider quota; warn loudly if prod boots without it.
+  if (!auth.enabled) {
+    console.warn('[auth] GOOGLE_CLIENT_ID/SESSION_SECRET not set — running OPEN (single local user, no login).');
+  }
   const app = createApp({
     getTokenClient: getGenAI,
     getCoachClient: getGenAI,
@@ -35,6 +41,7 @@ if (process.env.NODE_ENV !== 'test') {
     getCartesiaClient: getCartesia,
     getSarvamClient: getSarvam,
     getProgressRepo,
+    auth,
   });
   // Warm the Cartesia voice cache so the first translate turn is not cold.
   try {
@@ -48,8 +55,30 @@ if (process.env.NODE_ENV !== 'test') {
   // this only catches everything else. In dev the client is served by Vite, so
   // client/dist may be absent here -- harmless. Root is cwd-relative (cwd=/app
   // on Fly; the build copies client/dist to /app/client/dist).
-  app.use('/*', serveStatic({ root: './client/dist' }));
-  app.get('*', serveStatic({ path: 'index.html', root: './client/dist' }));
+  // Hashed assets (/assets/index-<hash>.js) are content-addressed → cache forever.
+  // Everything else, crucially index.html, is no-cache so a new deploy's HTML (and
+  // the new bundle hash it points to) is picked up immediately — no stale SPA after
+  // a deploy.
+  app.use(
+    '/*',
+    serveStatic({
+      root: './client/dist',
+      onFound: (path, c) => {
+        c.header(
+          'Cache-Control',
+          path.includes('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
+        );
+      },
+    }),
+  );
+  app.get(
+    '*',
+    serveStatic({
+      path: 'index.html',
+      root: './client/dist',
+      onFound: (_path, c) => c.header('Cache-Control', 'no-cache'),
+    }),
+  );
 
   const port = Number(process.env.PORT ?? 8787);
   const server = serve({ fetch: app.fetch, port }, (info) => {

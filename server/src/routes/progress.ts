@@ -4,11 +4,15 @@
 // needs the persistent volume. Schema/rationale: docs/pedagogy.md.
 
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import type { ProgressRepo, Phrase, Session, DrillMode, LanguageTag, PhraseOrigin } from '../lib/progressRepo.js';
+import type { AuthEnv } from '../lib/auth.js';
 import { newCard, reviewCard } from '../lib/scheduler.js';
 
 export interface ProgressRouteDeps {
-  getRepo: () => ProgressRepo;
+  /** Resolve the repo for a user — auth middleware injects the userId; defaults
+   *  to the single 'local' user when auth is disabled or the route is unmounted. */
+  getRepo: (userId: string) => ProgressRepo;
 }
 
 const LANGS = ['en', 'te'];
@@ -30,9 +34,10 @@ function num(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
-export function createProgressRoutes(deps: ProgressRouteDeps): Hono {
-  const routes = new Hono();
-  const repo = (): ProgressRepo => deps.getRepo();
+export function createProgressRoutes(deps: ProgressRouteDeps): Hono<AuthEnv> {
+  const routes = new Hono<AuthEnv>();
+  // Scope every operation to the authenticated user (per-user progress DB).
+  const repoFor = (c: Context<AuthEnv>): ProgressRepo => deps.getRepo(c.get('userId') ?? 'local');
 
   // Save a phrase (chunk) and create its FSRS card if new.
   routes.post('/phrases', async (c) => {
@@ -58,22 +63,22 @@ export function createProgressRoutes(deps: ProgressRouteDeps): Hono {
       origin: body.origin as PhraseOrigin,
       createdAt: num(body.createdAt) ? body.createdAt : Date.now(),
     };
-    const r = repo();
+    const r = repoFor(c);
     r.savePhrase(phrase);
     if (r.getCard(phrase.id) === undefined) r.putCard(newCard(phrase.id, new Date()));
     return c.json({ phrase, card: r.getCard(phrase.id) });
   });
 
-  routes.get('/phrases', (c) => c.json(repo().listPhrases()));
+  routes.get('/phrases', (c) => c.json(repoFor(c).listPhrases()));
 
   routes.delete('/phrases/:id', (c) => {
-    repo().deletePhrase(c.req.param('id'));
+    repoFor(c).deletePhrase(c.req.param('id'));
     return c.body(null, 204);
   });
 
   // Due review cards joined with their phrase + current scaffold rung.
   routes.get('/due', (c) => {
-    const r = repo();
+    const r = repoFor(c);
     const limitParam = Number(c.req.query('limit'));
     const limit = Number.isInteger(limitParam) && limitParam > 0 && limitParam <= MAX_DUE ? limitParam : 20;
     const now = Number(c.req.query('now')) || Date.now();
@@ -96,7 +101,7 @@ export function createProgressRoutes(deps: ProgressRouteDeps): Hono {
     if (!isRecord(body) || !str(body.phraseId, 128) || !num(body.score)) {
       return c.json({ error: 'review requires phraseId and numeric score' }, 400);
     }
-    const r = repo();
+    const r = repoFor(c);
     const card = r.getCard(body.phraseId);
     if (card === undefined) return c.json({ error: 'unknown phrase' }, 404);
     const score = Math.max(0, Math.min(100, Math.round(body.score)));
@@ -117,7 +122,7 @@ export function createProgressRoutes(deps: ProgressRouteDeps): Hono {
     if (!isRecord(body) || !num(body.score)) {
       return c.json({ error: 'attempt requires a numeric score' }, 400);
     }
-    const r = repo();
+    const r = repoFor(c);
     const phraseId = str(body.phraseId, 128) ? body.phraseId : null;
     recordAttempt(r, body, Math.max(0, Math.min(100, Math.round(body.score))), 'conversation');
     // Per-phrase rung when tied to a phrase; otherwise the global conversation
@@ -144,15 +149,15 @@ export function createProgressRoutes(deps: ProgressRouteDeps): Hono {
       utteranceCount: num(body.utteranceCount) ? body.utteranceCount : 0,
       phrasesSaved: num(body.phrasesSaved) ? body.phrasesSaved : 0,
     };
-    repo().appendSession(session);
+    repoFor(c).appendSession(session);
     return c.json(session);
   });
 
-  routes.get('/sessions', (c) => c.json(repo().listSessions()));
+  routes.get('/sessions', (c) => c.json(repoFor(c).listSessions()));
 
   // Current global conversation scaffold rung, so a session seeds from prior
   // progress instead of resetting to fully-scaffolded each time.
-  routes.get('/conversation-rung', (c) => c.json({ rung: repo().currentConversationRung() }));
+  routes.get('/conversation-rung', (c) => c.json({ rung: repoFor(c).currentConversationRung() }));
 
   return routes;
 }

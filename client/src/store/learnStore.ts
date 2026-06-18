@@ -15,10 +15,11 @@ import type { ProgressPort } from '../ports/ProgressPort';
 import type { LanguageTag, PcmChunk } from '../ports/types';
 import { romanize } from '../core/romanize';
 import { createEndpointer, type Endpointer } from '../core/vad';
-import { saveNewWord } from './vocabEngine';
+import { saveNewWord, saveNewWords } from './vocabEngine';
+import { micErrorMessage } from './micError';
 import type { Lesson } from '../adapters/http/learnClient';
 
-export type LearnFn = (knownVocab: string[]) => Promise<Lesson>;
+export type LearnFn = (knownVocab: string[], recentChunks: string[]) => Promise<Lesson>;
 export type TranscribeFn = (lang: LanguageTag, audioBase64: string, sampleRate: number) => Promise<string>;
 
 export interface LearnDeps {
@@ -50,9 +51,17 @@ export interface SubstitutionView {
   romanization: string;
 }
 
+/** A new content word the lesson introduces, glossed + client-romanized. */
+export interface NewWordView {
+  telugu: string;
+  romanization: string;
+  gloss: string;
+}
+
 export interface LessonView {
   chunk: ChunkView;
   substitutions: SubstitutionView[];
+  newWords: NewWordView[];
   why?: string | undefined;
 }
 
@@ -65,6 +74,9 @@ export interface LearnResult {
 
 const TARGET_LANG: LanguageTag = 'te';
 const CAPTURE_RATE = 16000;
+// How many recent chunk glosses to send so the model varies the frame instead
+// of regressing to the most common one ("I like X").
+const RECENT_CHUNKS_CAP = 8;
 // Generous pause window so a beginner isn't cut off mid-answer (matches the
 // conversation VAD). The warm mic makes the post-pause path fast.
 const LEARN_SILENCE_MS = 1200;
@@ -169,6 +181,9 @@ function toChunkView(c: { telugu: string; gloss: string }): ChunkView {
 function toSubView(s: { prompt: string; telugu: string }): SubstitutionView {
   return { prompt: s.prompt, telugu: s.telugu, romanization: romanize(s.telugu) };
 }
+function toNewWordView(w: { telugu: string; gloss: string }): NewWordView {
+  return { telugu: w.telugu, romanization: romanize(w.telugu), gloss: w.gloss };
+}
 
 
 // Module-level injected deps + capture state, owned here (not React) so StrictMode
@@ -184,6 +199,9 @@ let turnToken = 0;
 let currentLesson: Lesson | null = null;
 // Known vocab from the deck, so each lesson builds beyond what they've met.
 let knownVocab: string[] = [];
+// Glosses of the last few chunks taught this session, sent to the server so it
+// varies the sentence frame rather than repeating the most common pattern.
+let recentChunks: string[] = [];
 
 export function bindLearn(next: LearnDeps): void {
   deps = next;
@@ -230,7 +248,7 @@ export const useLearnStore = create<LearnStoreState>()((set, get) => {
       })();
     } catch (err) {
       endpointer = null;
-      if (token === turnToken) set({ status: 'error', error: errorMessage(err) });
+      if (token === turnToken) set({ status: 'error', error: micErrorMessage(err) });
     }
   }
 
@@ -260,10 +278,15 @@ export const useLearnStore = create<LearnStoreState>()((set, get) => {
       const transcript = await d.transcribe(TARGET_LANG, pcmToBase64(pcm), CAPTURE_RATE);
       const correct = sub !== undefined && matchesTarget(transcript, sub.telugu);
 
-      // Schedule the chunk via the shared new-words engine (creates its FSRS card,
-      // de-duped across tabs). Once per lesson (first attempt).
+      // Schedule the chunk AND each new content word via the shared new-words
+      // engine (FSRS cards, de-duped across tabs). The new words are what the
+      // learner is actually here to acquire, so they get their own review cards
+      // — not just the carrier phrase. Once per lesson (first attempt).
       if (firstAttempt && lesson) {
         await saveNewWord(d.progress, { telugu: lesson.chunk.telugu, gloss: lesson.chunk.gloss }, 'drill');
+        if (lesson.newWords.length > 0) {
+          await saveNewWords(d.progress, lesson.newWords, 'drill');
+        }
       }
 
       set({
@@ -294,11 +317,14 @@ export const useLearnStore = create<LearnStoreState>()((set, get) => {
     turnToken += 1;
     set({ status: 'loading', error: null, lastResult: null, showWhy: false, subIndex: 0 });
     try {
-      const lesson = await d.learn(knownVocab);
+      const lesson = await d.learn(knownVocab, recentChunks);
       currentLesson = lesson;
+      // Remember this frame so the next lesson is asked to differ from it.
+      recentChunks = [...recentChunks, lesson.chunk.gloss].slice(-RECENT_CHUNKS_CAP);
       const view: LessonView = {
         chunk: toChunkView(lesson.chunk),
         substitutions: lesson.substitutions.map(toSubView),
+        newWords: lesson.newWords.map(toNewWordView),
         why: lesson.why,
       };
       set({ status: 'input', lesson: view, subIndex: 0, lastResult: null, showWhy: false });
@@ -374,6 +400,7 @@ export const useLearnStore = create<LearnStoreState>()((set, get) => {
       endpointedPcm = null;
       currentLesson = null;
       knownVocab = [];
+      recentChunks = [];
       set({ status: 'idle', lesson: null, subIndex: 0, showWhy: false, lastResult: null, error: null });
     },
   };

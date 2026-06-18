@@ -95,6 +95,16 @@ export function LearnScreen(): ReactElement {
           <p className="te te-large learn-chunk-te">{lesson.chunk.telugu}</p>
           <p className="learn-chunk-roman">{lesson.chunk.romanization}</p>
           <p className="learn-chunk-gloss">{lesson.chunk.gloss}</p>
+          {lesson.newWords.length > 0 ? (
+            <p className="learn-new-words" aria-label="New words">
+              {lesson.newWords.map((w, i) => (
+                <span className="learn-new-word" key={`${w.telugu}-${i}`}>
+                  {i > 0 ? '; ' : 'New words: '}
+                  <span className="te">{w.telugu}</span> ({w.romanization}) — {w.gloss}
+                </span>
+              ))}
+            </p>
+          ) : null}
           <div className="review-controls">
             <button type="button" className="learn-replay" onClick={() => void replayChunk()}>
               ▶ Hear it

@@ -78,6 +78,7 @@ function lesson(overrides: Partial<Lesson> = {}): Lesson {
     substitutions: [
       { prompt: 'I want tea', telugu: 'నాకు టీ కావాలి', audioBase64: AUDIO_B64, outputSampleRate: 24000 },
     ],
+    newWords: [],
     why: 'Swap the middle word for what you want.',
     ...overrides,
   };
@@ -113,8 +114,10 @@ async function flushAsync(): Promise<void> {
   for (let i = 0; i < 50; i += 1) await Promise.resolve();
 }
 
-beforeEach(() => {
-  useLearnStore.setState({ status: 'idle', lesson: null, subIndex: 0, showWhy: false, lastResult: null, error: null });
+beforeEach(async () => {
+  // reset() also clears module-level state (knownVocab, recentChunks, currentLesson)
+  // so it can't leak between tests.
+  await useLearnStore.getState().reset();
 });
 
 describe('matchesTarget', () => {
@@ -133,7 +136,7 @@ describe('learnStore', () => {
     await useLearnStore.getState().start();
 
     expect(b.listPhrases).toHaveBeenCalledTimes(1);
-    expect(b.learn).toHaveBeenCalledWith(['నేను', 'మీరు']);
+    expect(b.learn).toHaveBeenCalledWith(['నేను', 'మీరు'], []);
     const s = useLearnStore.getState();
     expect(s.status).toBe('input');
     expect(s.lesson?.chunk.telugu).toBe('నాకు నీళ్ళు కావాలి');
@@ -159,6 +162,36 @@ describe('learnStore', () => {
     // The chunk was saved to the deck (becomes an FSRS review card).
     expect(b.savePhrase).toHaveBeenCalledTimes(1);
     expect(b.savePhrase.mock.calls[0]?.[0]).toMatchObject({ targetText: 'నాకు నీళ్ళు కావాలి', origin: 'drill' });
+  });
+
+  it('saves the chunk AND each new content word to the deck', async () => {
+    const b = bind({
+      transcript: 'నాకు టీ కావాలి',
+      lesson: lesson({ newWords: [{ telugu: 'నీళ్ళు', gloss: 'water' }, { telugu: 'టీ', gloss: 'tea' }] }),
+    });
+    await useLearnStore.getState().start();
+    await useLearnStore.getState().practice();
+    await flushAsync();
+    // Chunk + 2 new words = 3 saves, all tagged 'drill'.
+    expect(b.savePhrase).toHaveBeenCalledTimes(3);
+    const saved = b.savePhrase.mock.calls.map((c) => (c[0] as { targetText: string }).targetText);
+    expect(saved).toContain('నాకు నీళ్ళు కావాలి'); // the chunk
+    expect(saved).toContain('నీళ్ళు'); // a new word
+    expect(saved).toContain('టీ');
+    // The new words surface in the lesson view too.
+    expect(useLearnStore.getState().lesson?.newWords.map((w) => w.gloss)).toEqual(['water', 'tea']);
+  });
+
+  it('sends recent chunk glosses so the server can vary the frame', async () => {
+    const b = bind({ transcript: 'నాకు టీ కావాలి' });
+    await useLearnStore.getState().start();
+    // First lesson: no history yet.
+    expect(b.learn.mock.calls[0]?.[1]).toEqual([]);
+    await useLearnStore.getState().practice();
+    await flushAsync();
+    await useLearnStore.getState().next(); // single substitution -> loads lesson 2
+    // Second lesson carries the first chunk's gloss as recent history.
+    expect(b.learn.mock.calls[1]?.[1]).toContain('I want water');
   });
 
   it('marks an off-target attempt incorrect but still reveals the answer', async () => {
