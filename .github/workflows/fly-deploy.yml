@@ -1,0 +1,25 @@
+name: Deploy to Fly
+
+# Every push to main ships to Fly. The VITE_GOOGLE_CLIENT_ID build arg is read
+# from fly.toml ([build.args]) so no extra flags are needed here. Auth is a Fly
+# deploy token stored as the FLY_API_TOKEN repo secret.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Never let two deploys race; a newer push supersedes an in-flight one.
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

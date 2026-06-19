@@ -4,6 +4,11 @@ primary_region = "sjc"
 
 [build]
   dockerfile = "Dockerfile"
+  # Baked into the client bundle at build time. This is the PUBLIC Google OAuth
+  # client id (safe to commit / expose); having it here means every `flyctl deploy`
+  # — manual or from CI — bakes it in without a --build-arg flag.
+  [build.args]
+    VITE_GOOGLE_CLIENT_ID = "654320307469-1ae1lpjh34d2jbonvjdqbmiesdis095a.apps.googleusercontent.com"
 
 [env]
   # Progress SQLite DB lives on the mounted volume so it survives deploys.
